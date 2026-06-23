@@ -55,6 +55,14 @@ schemas: ## Generate Java from .proto only
 run-ingestion: ## Run the ingestion gateway (expects infra up)
 	$(MVN) -q -pl telemetry-ingestion-service spring-boot:run
 
+.PHONY: run-graph
+run-graph: ## Run the graph engine (Engine 1: propagation + RAPTOR), :8091
+	$(MVN) -q -pl graph-engine-service spring-boot:run -Dspring-boot.run.jvmArguments="-Xmx2g"
+
+.PHONY: fetch-gtfs
+fetch-gtfs: ## Download the full real Transilien/IDFM GTFS feed into data/gtfs/
+	bash scripts/fetch-gtfs.sh
+
 ## ---- Validation (DoD) ------------------------------------------------------
 
 .PHONY: smoke
@@ -70,7 +78,24 @@ smoke: ## Send one valid + one malformed payload (checks happy path + DLQ)
 
 .PHONY: load
 load: ## Throughput test: bash scripts/loadgen.sh [TOTAL] [BATCH]
-	bash scripts/loadgen.sh 20000 2000 8 
+	bash scripts/loadgen.sh 20000 2000 8
+
+.PHONY: graph-matrix
+graph-matrix: ## Fetch the live network matrix JSON from the graph engine
+	curl -s localhost:8091/graph/matrix | head -c 2000; echo
+
+.PHONY: graph-spectral
+graph-spectral: ## Fetch the STGCN spectral matrix (Chebyshev-scaled Laplacian)
+	curl -s "localhost:8091/graph/spectral?form=scaled" | head -c 2000; echo
+
+.PHONY: cascade-demo
+cascade-demo: ## Post a delayed PositionEvent at La Défense to trigger a cascade
+	@echo "  → looking up La Defense station index…"
+	curl -s -o /dev/null -w "  HTTP %{http_code}\n" -X POST localhost:8090/ingest/position \
+	  -H 'Content-Type: application/json' \
+	  -d '{"trip_id":"RER-A:demo","lat":48.8918,"lon":2.2386,"delay_seconds":600}'
+	@echo "  → watch rail.graph.cascade in Console (http://localhost:8080)"
+	@echo "  → find station indices: curl localhost:8091/graph/stations?q=defense"
 
 .PHONY: help
 help: ## Show this help

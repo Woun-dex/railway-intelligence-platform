@@ -16,24 +16,7 @@ import com.rail.platform.ingestion.domain.port.out.TelemetryPublisherPort;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-/**
- * Application service that realizes the {@link IngestTelemetryUseCase}.
- *
- * <p>It is the orchestrator at the centre of the hexagon: it wires the three
- * outbound ports — normalize (ACL), publish, dead-letter — into the one
- * business rule of the context:
- *
- * <pre>
- *   normalize(raw)  ──success──▶  publish(normalized)
- *                   ──failure──▶  deadLetter(raw, reason)
- * </pre>
- *
- * <p>It holds no transport or wire-format knowledge; every collaborator is a
- * domain port. Normalization failures are caught and quarantined so the caller
- * never sees an exception — the "zero message handling exceptions" DoD clause.
- * Publication failures are <em>not</em> dead-lettered: those are transient
- * infrastructure faults that the producer retries (idempotent, acks=all).
- */
+
 @Service
 public class TelemetryIngestionService implements IngestTelemetryUseCase {
 

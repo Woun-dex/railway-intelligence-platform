@@ -1,0 +1,64 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: graph-engine-service
+
+rail:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    schema-registry-url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
+    consumer-group: graph-engine
+    topics:
+      position: rail.raw.position
+      cascade: rail.graph.cascade
+
+  graph:
+    # GTFS source: a directory or a .zip. Defaults to the bundled real Transilien
+    # extract so the engine runs offline; point at the full feed fetched by
+    # scripts/fetch-gtfs.sh for the real-scale (~392-station) network.
+    gtfs:
+      path: ${RAIL_GTFS_PATH:file:../data/gtfs/IDFM-gtfs.zip}
+      # GTFS route_type values to keep:
+      #   2 = Rail (RER / Transilien / TER)
+      #   1 = Metro   0 = Tram   3 = Bus
+      # Default: rail only. Set RAIL_GTFS_ROUTE_TYPES=0,1,2 for rail+metro+tram.
+      route-types: ${RAIL_GTFS_ROUTE_TYPES:2}
+    pagerank:
+      damping: 0.85
+      iterations: 50
+    spectral:
+      # Gaussian-kernel bandwidth for the STGCN weighted adjacency, in seconds.
+      # 0 = derive from the travel-time distribution (std-dev).
+      sigma-sec: 0
+      epsilon: 0.0           # drop kernel weights below this threshold
+      lambda-iterations: 100 # power-iteration steps for lambda_max
+    propagation:
+      # Safety bound on cascade fan-out (defence in depth; slack absorption
+      # already terminates the forward pass).
+      max-hops: 128
+    hazelcast:
+      cluster-name: rail-graph
+      backup-count: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      service: graph-engine
+
+logging:
+  level:
+    root: INFO
+    com.rail.platform: INFO
+    com.hazelcast: WARN
+    org.apache.kafka.clients.consumer.ConsumerConfig: WARN
+    org.apache.kafka.clients.producer.ProducerConfig: WARN
+    io.confluent: WARN

@@ -1,0 +1,5 @@
+route_id,route_short_name,route_long_name,route_type
+RERA,A,RER A,2
+RERE,E,RER E (EOLE),2
+TLINEL,L,Transilien Ligne L,2
+TLINEJ,J,Transilien Ligne J,2

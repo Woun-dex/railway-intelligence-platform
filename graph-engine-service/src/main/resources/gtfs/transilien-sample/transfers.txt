@@ -1,0 +1,7 @@
+from_stop_id,to_stop_id,transfer_type,min_transfer_time
+PSL,HSL,2,300
+HSL,PSL,2,300
+NANU,NLF,2,480
+NLF,NANU,2,480
+NANV,NANU,2,600
+NANU,NANV,2,600

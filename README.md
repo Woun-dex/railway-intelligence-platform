@@ -4,10 +4,12 @@ Real-Time Transit Disruption Intelligence Platform — an event-driven system th
 detects a rail disruption, computes its passenger impact, predicts escalation,
 and delivers the right message to every screen within a hard real-time budget.
 
-> **This repository is at Milestone 1: The Backbone** — infrastructure,
-> high-throughput ingestion, and strict serialization contracts. The downstream
-> engines (propagation, RAPTOR, STGCN, optimization, diffusion) arrive in later
-> milestones; their event contracts are already fixed in `shared-schemas`.
+> **Milestones 1 & 2 are implemented.** Milestone 1 is the backbone —
+> infrastructure, high-throughput ingestion, strict serialization contracts.
+> Milestone 2 is **Engine 1** — the embedded-Hazelcast graph layer with
+> deterministic delay propagation and a localized RAPTOR router, loaded from real
+> Transilien GTFS. The remaining engines (STGCN, optimization, diffusion) arrive
+> in later milestones; their event contracts are already fixed in `shared-schemas`.
 
 ---
 
@@ -127,6 +129,114 @@ make test     # unit tests: partitioner determinism + schema compat + parser
 make smoke    # happy-path + DLQ in one shot
 make load     # throughput benchmark  (bash scripts/loadgen.sh [TOTAL] [BATCH] [WORKERS])
 make topics   # list topics
+```
+
+---
+
+## Milestone 2 — Engine 1 (Graph Engine)
+
+The memory-localized computation layer: an **embedded Hazelcast IMDG** holds the
+rail topology as flat primitive arrays (CSR), loaded from the **real IDFM GTFS
+feed** (Île-de-France Mobilités — RER, Transilien, TER). Two engines read it
+directly from heap:
+
+- **Engine 1a — delay propagation.** Consumes `rail.raw.position`, cascades each
+  delay downstream through the event-activity network with running/dwell/transfer
+  **slack absorption**, prioritized by an offline **PageRank** hub vector, and
+  emits `CascadeEvent` to `rail.graph.cascade`.
+- **Engine 1b — RAPTOR.** Round-based journey planner over the flat timetable,
+  returning the Pareto frontier over `(arrival_time, transfers)`. Full-network
+  recompute is **sub-millisecond** (DoD budget: < 12 ms).
+
+```
+graph-engine-service/
+└── src/main/java/com/rail/platform/graph/
+    ├── domain/model/        RailTopology (CSR flat arrays), RailTopologyBuilder, …
+    ├── application/          DelayPropagationService (1a), RaptorRouter (1b), HubRankingService
+    └── infrastructure/
+        ├── topology/         GtfsTopologyLoader, SlackModel, HazelcastTopologyRepository
+        ├── config/           HazelcastConfig, Kafka consumer/producer
+        ├── messaging/        PositionEventConsumer, KafkaCascadePublisher
+        └── web/              GraphMatrixController + static/viz.html
+```
+
+### Run it
+
+```bash
+make up            # infra (if not already running)
+make build
+make run-graph     # graph engine on :8091  (run-ingestion in another shell for the live flow)
+```
+
+- **Network viewer** — http://localhost:8091/viz.html (adjacency-matrix heatmap +
+  geographic node-link graph + a RAPTOR journey form; node size = PageRank hub score)
+- **Matrix JSON** — http://localhost:8091/graph/matrix (`make graph-matrix`)
+- **Stats / top hubs** — http://localhost:8091/graph/stats
+- **Station search** — `http://localhost:8091/graph/stations?q=defense&limit=10`
+- **RAPTOR** — `http://localhost:8091/graph/plan?from=16&to=23&departure=25200`
+- **Spectral matrix (STGCN)** — `http://localhost:8091/graph/spectral?form=scaled`
+- **Health** — http://localhost:8091/actuator/health
+
+#### STGCN-ready spectral matrix
+
+`/graph/matrix` is the raw directed adjacency (for the viewer). The next engine
+(STGCN / ChebNet) needs the **symmetric normalized Laplacian** rather than the
+raw graph, so `/graph/spectral` exposes it directly (sparse COO):
+
+| `form` | Matrix | Use |
+|---|---|---|
+| `adjacency` | `Â = D̃^{-1/2}(W+I)D̃^{-1/2}` | GCN renormalization trick |
+| `laplacian` | `L = I − D^{-1/2} W D^{-1/2}` | normalized Laplacian |
+| `scaled` (default) | `L̃ = (2/λmax)L − I` | **Chebyshev-ready** (spectrum in [-1,1]) |
+
+The weighted adjacency `W` is the directed running graph symmetrized with a
+Gaussian kernel on travel time (`w_ij = exp(−t_ij²/σ²)`, Yu et al. 2018), and
+`λmax` is computed by power iteration. The STGCN service consumes `L̃` and runs
+the Chebyshev recurrence `T_k(L̃) = 2·L̃·T_{k-1} − T_{k-2}`.
+
+### See a cascade end-to-end
+
+```bash
+make run-ingestion          # shell 1  (:8090)
+make run-graph              # shell 2  (:8091)
+make cascade-demo           # posts a delayed PositionEvent at La Défense
+# -> CascadeEvent records appear on rail.graph.cascade in Console (http://localhost:8080)
+```
+
+> Station indices are dynamic and depend on the loaded feed. Use the station
+> search endpoint to find indices: `curl localhost:8091/graph/stations?q=defense`
+
+### GTFS data source
+
+The engine defaults to the **full IDFM GTFS feed** (`../data/gtfs/IDFM-gtfs.zip`,
+~392 Transilien stations, 24 rail routes including RER A–E, Transilien
+H/J/K/L/N/P/R/U/V, and regional TER lines). The feed should be placed at
+`data/gtfs/IDFM-gtfs.zip` (download via `make fetch-gtfs`).
+
+To use the small bundled 26-station sample instead:
+
+```bash
+RAIL_GTFS_PATH=classpath:gtfs/transilien-sample make run-graph
+```
+
+To include metro and tram networks alongside rail:
+
+```bash
+RAIL_GTFS_ROUTE_TYPES=0,1,2 make run-graph
+```
+
+### Definition of Done — validation
+
+| DoD criterion | How to check |
+|---|---|
+| **Exact multi-transfer Pareto routing on a 100-station network** | `RaptorRouterTest` asserts the exact frontier `[(9000,0),(4000,1),(3000,2)]` plus Pareto invariants. |
+| **Full-network RAPTOR recompute < 12 ms** | `RaptorBenchmarkTest` (tag `benchmark`) — measured **p99 ≈ 0.014 ms** on the mock network. |
+| **Hazelcast partitions recover on node restart** | `HazelcastFaultInjectionTest` — 2-member cluster, crash a member, snapshot survives via backup and re-syncs to a restarted member. |
+| **Real GTFS topology** | `GtfsTopologyLoaderTest` — parses the bundled extract (26 stations, 4 routes, CSR adjacency + foot transfers). Conditional IDFM integration tests run when the full feed is present. |
+
+```bash
+mvn -pl graph-engine-service test                 # all engine tests
+mvn -pl graph-engine-service test -Dgroups=benchmark   # benchmark only
 ```
 
 ---

@@ -35,5 +35,8 @@ logs/
 docker/data/
 kafka-data/
 
+# Full GTFS feed fetched by scripts/fetch-gtfs.sh (the trimmed sample is committed)
+data/gtfs/
+
 # Env
 .env
