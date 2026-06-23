@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package rail.display.v1;
+
+option java_package = "com.rail.platform.schemas.display";
+option java_multiple_files = true;
+option java_outer_classname = "DisplayProto";
+
+
+// Target channel classes — each has its own slot count and weighting.
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  CHANNEL_PIV         = 1; // platform display, MQTT retained
+  CHANNEL_ONBOARD     = 2; // onboard display, MQTT QoS 1
+  CHANNEL_MOBILE      = 3; // personalized, WebSocket, O-D filtered
+  CHANNEL_LINE        = 4; // line-wide broadcast
+  CHANNEL_CAB         = 5; // safety-critical, segmented plane
+}
+
+// CriticalityScore — the per-candidate score (Engine 2).
+message CriticalityScore {
+  double t_impact      = 1; // travel-time surplus term
+  double p_miss        = 2; // missed-connection probability term
+  double i_escalate    = 3; // predicted worsening term (from STGCN)
+  double v_context     = 4; // vulnerability/context term
+  double beta_hub      = 5; // hub-criticality multiplier (betweenness)
+  double total         = 6; // aggregated CS
+}
+
+// DisplayMessage — a single rankable message destined for a screen.
+message DisplayMessage {
+  string message_id  = 1;
+  string trip_id     = 2; // partition key
+  Channel channel    = 3;
+  string subject     = 4; // edge subject/topic, e.g. "piv/idf/{gare}/{quai}"
+
+  string headline    = 5;
+  string body        = 6;
+  string locale      = 7; // BCP-47, e.g. "fr-FR"
+
+  CriticalityScore score = 8;
+
+  int64  valid_from_ms = 9;
+  int64  valid_to_ms   = 10;
+  int64  display_seq   = 11; // monotonic per target — prevents time-travel
+}
+
+// DecisionEvent — the Top-K selection for one target/channel.
+message DecisionEvent {
+  string event_id  = 1;
+  string trip_id   = 2; // partition key
+  Channel channel  = 3;
+  string target_id = 4; // concrete screen/target identifier
+  int32  k         = 5; // number of slots filled
+
+  repeated DisplayMessage messages = 6; // ranked, highest CS first
+
+  int64 event_time_ms   = 7;
+  int64 decision_time_ms = 8;
+}

@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package rail.prediction.v1;
+
+option java_package = "com.rail.platform.schemas.prediction";
+option java_multiple_files = true;
+option java_outer_classname = "PredictionProto";
+
+// ---------------------------------------------------------------------------
+// Prediction & cascade contracts.
+//
+// Defined here in Milestone 1 so the contract is fixed early, but produced by
+// later engines: the Graph Engine (cascade propagation) and the STGCN service
+// (escalation forecast). Keeping them in the shared schema module guarantees
+// every consumer compiles against the same definitions.
+// ---------------------------------------------------------------------------
+
+// A single quantile estimate of a predicted delay.
+message Quantile {
+  double tau           = 1; // quantile level, e.g. 0.5, 0.9, 0.95
+  double delay_seconds = 2; // predicted delay at this quantile
+}
+
+// CascadeEvent — output of Engine 1a (event-activity network propagation).
+message CascadeEvent {
+  string event_id        = 1;
+  string origin_event_id = 2; // the primary delay that triggered the cascade
+  string trip_id         = 3; // affected trip — the partition key
+  int32  station_id      = 4;
+
+  double propagated_delay_seconds = 5; // delay after slack absorption
+  double absorbed_slack_seconds   = 6;
+  bool   missed_connection        = 7; // transfer slack exceeded
+
+  string graph_version  = 8;
+  int64  event_time_ms  = 9;
+  int64  compute_time_ms = 10;
+}
+
+// PredictionEvent — output of Engine 3 (STGCN escalation forecast).
+message PredictionEvent {
+  string event_id   = 1;
+  string trip_id    = 2; // partition key
+  int32  station_id = 3;
+
+  int32  horizon_seconds = 4; // forecast horizon (e.g. 1200 for t+20min)
+  double current_delay_seconds = 5;
+
+  // Quantile head: median + upside-risk quantiles (P90/P95).
+  repeated Quantile quantiles = 6;
+
+  double escalation_ratio = 7; // (delta_hat - delta) / delta, clipped [0,1]
+  bool   fallback_used    = 8; // true if heuristic fallback produced this
+
+  string model_version = 9;
+  string graph_version = 10;
+  int64  event_time_ms = 11;
+  int64  inference_time_ms = 12;
+}

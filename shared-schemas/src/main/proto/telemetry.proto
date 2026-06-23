@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+package rail.telemetry.v1;
+
+option java_package = "com.rail.platform.schemas.telemetry";
+option java_multiple_files = true;
+option java_outer_classname = "TelemetryProto";
+
+// ---------------------------------------------------------------------------
+// Raw telemetry contracts.
+//
+// These are the entry-point events of the platform. They are produced by the
+// ingestion gateway after normalizing heterogeneous upstream feeds
+// (SIRI-ET / GTFS-RT). Every event carries an absolute snapshot (never an
+// increment) so that last-write-wins is always a safe merge strategy
+// downstream.
+//
+// Partitioning contract: all events are keyed by `trip_id` so that the per-
+// journey causal sequence is preserved across partitions (see TripIdPartitioner).
+// ---------------------------------------------------------------------------
+
+// Geographic position of a vehicle (WGS84).
+message GeoPoint {
+  double latitude  = 1;
+  double longitude = 2;
+}
+
+// PositionEvent — a real-time GPS/AVL ping for a single vehicle on a trip.
+message PositionEvent {
+  // ---- Identity ----
+  string event_id   = 1;  // idempotency key (UUID), set by the gateway
+  string trip_id    = 2;  // journey identity — the partition key
+  string vehicle_id = 3;  // physical trainset / rame id
+  string line_id    = 4;  // commercial line (e.g. "RER-E")
+
+  // ---- Position ----
+  GeoPoint position  = 5;
+  double   bearing   = 6;  // heading in degrees [0,360)
+  double   speed_kmh = 7;
+
+  // ---- Delay state (absolute) ----
+  int32 station_id    = 8;  // current/last station reference
+  int32 next_stop_id  = 9;  // upcoming station reference
+  double delay_seconds = 10; // current schedule deviation, signed (+late/-early)
+
+  // ---- Provenance ----
+  string source_feed   = 11; // "SIRI-ET" | "GTFS-RT" | ...
+  string graph_version  = 12; // topology version this event was emitted against
+  int64  event_time_ms  = 13; // event time (epoch millis)
+  int64  ingest_time_ms = 14; // gateway receive time (epoch millis)
+}
+
+// Signalling block occupancy / interlocking state.
+enum BlockState {
+  BLOCK_STATE_UNSPECIFIED = 0;
+  BLOCK_STATE_CLEAR       = 1; // unoccupied, available
+  BLOCK_STATE_OCCUPIED    = 2; // a train is present
+  BLOCK_STATE_RESERVED    = 3; // route locked ahead of a movement
+  BLOCK_STATE_FAILED      = 4; // detection / equipment failure
+}
+
+enum InterlockingStatus {
+  INTERLOCKING_STATUS_UNSPECIFIED = 0;
+  INTERLOCKING_STATUS_NORMAL      = 1;
+  INTERLOCKING_STATUS_DEGRADED    = 2;
+  INTERLOCKING_STATUS_FAILURE     = 3;
+}
+
+// SignallingEvent — block occupancy and interlocking status for a track segment.
+message SignallingEvent {
+  string event_id   = 1;
+  string trip_id    = 2;  // occupying/owning trip — the partition key
+  string block_id   = 3;  // signalling block / track-circuit id
+  int32  station_id = 4;
+
+  BlockState         block_state         = 5;
+  InterlockingStatus interlocking_status = 6;
+  string             owning_signal_id    = 7;
+
+  string graph_version  = 8;
+  int64  event_time_ms  = 9;
+  int64  ingest_time_ms = 10;
+}
+
+// Structural category of an incident.
+enum IncidentCategory {
+  INCIDENT_CATEGORY_UNSPECIFIED      = 0;
+  INCIDENT_CATEGORY_INFRASTRUCTURE   = 1; // track, catenary, signalling fault
+  INCIDENT_CATEGORY_ROLLING_STOCK    = 2; // train failure
+  INCIDENT_CATEGORY_EXTERNAL         = 3; // intrusion, weather, third party
+  INCIDENT_CATEGORY_PASSENGER        = 4; // medical, malicious alarm, crowding
+  INCIDENT_CATEGORY_OPERATIONAL      = 5; // staffing, planning
+}
+
+enum IncidentSeverity {
+  INCIDENT_SEVERITY_UNSPECIFIED = 0;
+  INCIDENT_SEVERITY_MINOR       = 1;
+  INCIDENT_SEVERITY_MAJOR       = 2;
+  INCIDENT_SEVERITY_CRITICAL    = 3;
+}
+
+// IncidentEvent — a structural disruption affecting one or more lines.
+message IncidentEvent {
+  string event_id = 1;
+  // Incidents are keyed by trip_id when attributable to a specific journey,
+  // else by the primary impacted line id (gateway fills the partition key).
+  string trip_id  = 2;
+
+  IncidentCategory category = 3;
+  IncidentSeverity severity = 4;
+
+  repeated string impacted_line_ids    = 5;
+  repeated int32  impacted_station_ids = 6;
+
+  string description = 7;
+
+  int64 start_time_ms              = 8;  // incident onset
+  int64 estimated_clearance_ms     = 9;  // estimated end of disruption window
+  bool  clearance_estimate_known   = 10; // false => open-ended
+
+  string graph_version  = 11;
+  int64  event_time_ms  = 12;
+  int64  ingest_time_ms = 13;
+}

@@ -1,0 +1,126 @@
+
+name: rail-backbone
+
+services:
+
+  # --- Apache Kafka (KRaft mode, single combined broker+controller) ---------
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka
+    container_name: rail-kafka
+    ports:
+      - "9092:9092"   # external listener for host clients (ingestion service)
+      - "9101:9101"   # JMX
+    environment:
+      # KRaft roles
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+
+      # Listeners: INTERNAL for inter-container, EXTERNAL for host
+      KAFKA_LISTENERS: "INTERNAL://kafka:29092,CONTROLLER://kafka:29093,EXTERNAL://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:29092,EXTERNAL://localhost:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+
+      # Single-node durability/perf knobs
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 22
+      KAFKA_LOG_RETENTION_HOURS: 72
+      CLUSTER_ID: "F2gV2tqESPflkmAFHubgTw"
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # --- Confluent Schema Registry (Protobuf contracts) -----------------------
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    hostname: schema-registry
+    container_name: rail-schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      # Must use a security-PROTOCOL prefix (PLAINTEXT), not the listener name.
+      # The INTERNAL listener maps to PLAINTEXT in the broker's protocol map.
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://kafka:29092"
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+      # Enforce backwards compatibility for schema evolution (DoD requirement)
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: "BACKWARD"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # --- Topic bootstrap (creates topics with >=22 partitions, then exits) ----
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: rail-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        echo "Creating topics on rail-kafka ..."
+        create() {
+          kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+            --topic "$$1" --partitions "$$2" --replication-factor 1 \
+            --config retention.ms=259200000
+          echo "  ok: $$1 ($$2 partitions)"
+        }
+        # Raw ingestion entry points (>= 22 partitions for per-trip ordering)
+        create rail.raw.position    22
+        create rail.raw.signalling  22
+        create rail.raw.incident    22
+        # Dead-letter queue for unparseable payloads
+        create rail.raw.dlq          6
+        # Downstream topics (producers arrive in later milestones)
+        create rail.graph.cascade   22
+        create rail.predictions.stgcn 22
+        create rail.decisions.topk  22
+        echo "All topics created."
+        kafka-topics --bootstrap-server kafka:29092 --list
+
+  # --- Redpanda Console (topic/schema/consumer-group visualization) ---------
+  console:
+    image: redpandadata/console:v2.5.2
+    container_name: rail-console
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka:29092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://schema-registry:8081"]
+    entrypoint: ["/bin/sh", "-c", "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"]
+
+volumes:
+  kafka-data:
+    driver: local

@@ -1,0 +1,40 @@
+server:
+  port: 8090
+  # Netty access logging off in the hot path; rely on metrics instead.
+
+spring:
+  application:
+    name: telemetry-ingestion-service
+  codec:
+    # Allow large array bodies on the /batch endpoints (default is 256KB).
+    max-in-memory-size: 16MB
+
+rail:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    schema-registry-url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
+    topics:
+      position: rail.raw.position
+      signalling: rail.raw.signalling
+      incident: rail.raw.incident
+      dlq: rail.raw.dlq
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      service: telemetry-ingestion
+
+logging:
+  level:
+    root: INFO
+    com.rail.platform: INFO
+    # Quiet the very chatty Kafka producer logs in dev.
+    org.apache.kafka.clients.producer.ProducerConfig: WARN
+    io.confluent: WARN
