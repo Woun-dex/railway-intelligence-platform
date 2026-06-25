@@ -6,6 +6,12 @@ spring:
     name: graph-engine-service
 
 rail:
+  # Public Mapbox token for the viewer, taken from the environment so it is never
+  # committed. Set MAPBOX_TOKEN in your shell or a (gitignored) .env. Restrict the
+  # pk.* token by URL in your Mapbox account.
+  mapbox:
+    token: ${MAPBOX_TOKEN:}
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     schema-registry-url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
@@ -13,6 +19,16 @@ rail:
     topics:
       position: rail.raw.position
       cascade: rail.graph.cascade
+      display: rail.display
+
+  # Passenger-information feed: the engine publishes next-departure events to
+  # rail.display on this cadence (one message per departure, keyed by line/"canal").
+  display:
+    interval-ms: ${RAIL_DISPLAY_INTERVAL_MS:15000}
+    initial-delay-ms: ${RAIL_DISPLAY_INITIAL_DELAY_MS:8000}
+    per-line: ${RAIL_DISPLAY_PER_LINE:5}
+    # Stations to publish boards for; 0 = the whole network.
+    station-limit: ${RAIL_DISPLAY_STATION_LIMIT:0}
 
   graph:
     # GTFS source: a directory or a .zip. Defaults to the bundled real Transilien
@@ -25,9 +41,19 @@ rail:
       #   1 = Metro   0 = Tram   3 = Bus
       # Default: rail only. Set RAIL_GTFS_ROUTE_TYPES=0,1,2 for rail+metro+tram.
       route-types: ${RAIL_GTFS_ROUTE_TYPES:2}
+      # Commercial line allow-list (route_short_name). route_type=2 in the full
+      # IDFM feed also carries TER/Intercités lines that span all of France, which
+      # would inflate the graph to thousands of stations. Restricting to the
+      # Transilien/RER codes yields the real ~392-station Île-de-France network:
+      #   RER A,B,C,D,E  +  Transilien H,J,K,L,N,P,R,U,V
+      # Leave blank (RAIL_GTFS_LINES=) to keep every route of the kept route_types.
+      lines: ${RAIL_GTFS_LINES:A,B,C,D,E,H,J,K,L,N,P,R,U,V}
     pagerank:
       damping: 0.85
       iterations: 50
+      # Cron for the periodic hub-ranking refresh (Europe/Paris). The PCC command
+      # endpoint also triggers an immediate recompute. Set to "-" to disable.
+      refresh-cron: ${RAIL_PAGERANK_REFRESH_CRON:0 */5 * * * *}
     spectral:
       # Gaussian-kernel bandwidth for the STGCN weighted adjacency, in seconds.
       # 0 = derive from the travel-time distribution (std-dev).

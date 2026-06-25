@@ -39,6 +39,9 @@ public final class RailTopologyBuilder {
     // ---- Routes (RAPTOR) ---------------------------------------------------
     private final Map<String, RouteAccum> routes = new LinkedHashMap<>();
 
+    // ---- Display geometry (directed station-pair key -> [lon,lat,...]) ------
+    private Map<Long, float[]> segmentGeom = new LinkedHashMap<>();
+
     private String graphVersion = "g-dev";
 
     private static long key(int from, int to) {
@@ -47,9 +50,10 @@ public final class RailTopologyBuilder {
 
     private static final class RouteAccum {
         final int[] pattern;
+        final String line;
         final List<int[]> arr = new ArrayList<>();
         final List<int[]> dep = new ArrayList<>();
-        RouteAccum(int[] pattern) { this.pattern = pattern; }
+        RouteAccum(int[] pattern, String line) { this.pattern = pattern; this.line = line; }
     }
 
     /** Adds a station (idempotent by {@code stopId}); returns its index. */
@@ -70,11 +74,27 @@ public final class RailTopologyBuilder {
 
     /** Tags a station as served by a commercial line. */
     public RailTopologyBuilder line(int station, String lineName) {
-        int li = lineIndex.computeIfAbsent(lineName, k -> {
+        stationLineSets.get(station).add(lineIdx(lineName));
+        return this;
+    }
+
+    /** Registers a commercial line (idempotent); returns its index. */
+    private int lineIdx(String lineName) {
+        return lineIndex.computeIfAbsent(lineName, k -> {
             lineNames.add(k);
             return lineNames.size() - 1;
         });
-        stationLineSets.get(station).add(li);
+    }
+
+    /** Station latitude by index (construction-time accessor for geometry projection). */
+    public double stationLat(int idx) { return lats.get(idx); }
+
+    /** Station longitude by index (construction-time accessor for geometry projection). */
+    public double stationLon(int idx) { return lons.get(idx); }
+
+    /** Supplies the directed station-pair track polylines built from {@code shapes.txt}. */
+    public RailTopologyBuilder geometry(Map<Long, float[]> segments) {
+        this.segmentGeom = segments;
         return this;
     }
 
@@ -104,8 +124,9 @@ public final class RailTopologyBuilder {
         if (stationSeq.length != arrSec.length || stationSeq.length != depSec.length) {
             throw new IllegalArgumentException("trip arrays must share length");
         }
+        lineIdx(lineName);
         String patternKey = lineName + "|" + Arrays.toString(stationSeq);
-        RouteAccum r = routes.computeIfAbsent(patternKey, k -> new RouteAccum(stationSeq.clone()));
+        RouteAccum r = routes.computeIfAbsent(patternKey, k -> new RouteAccum(stationSeq.clone(), lineName));
         r.arr.add(arrSec.clone());
         r.dep.add(depSec.clone());
         return this;
@@ -185,6 +206,7 @@ public final class RailTopologyBuilder {
         int[] routeStopsPtr = new int[r + 1];
         int[] tripTimesBase = new int[r];
         int[] routeTripCount = new int[r];
+        int[] routeLine = new int[r];
         List<RouteAccum> routeList = new ArrayList<>(routes.values());
 
         int stopsTotal = 0;
@@ -195,6 +217,7 @@ public final class RailTopologyBuilder {
             routeStopsPtr[ri + 1] = routeStopsPtr[ri] + s;
             routeTripCount[ri] = ra.arr.size();
             tripTimesBase[ri] = timesTotal;
+            routeLine[ri] = lineIndex.getOrDefault(ra.line, 0);
             stopsTotal += s;
             timesTotal += s * ra.arr.size();
         }
@@ -248,11 +271,15 @@ public final class RailTopologyBuilder {
         double[] pagerank = new double[n];
         Arrays.fill(pagerank, n == 0 ? 0.0 : 1.0 / n);
 
+        NetworkGeometry geometry = (segmentGeom == null || segmentGeom.isEmpty())
+                ? NetworkGeometry.empty()
+                : new NetworkGeometry(segmentGeom);
+
         return new RailTopology(n, stopId, name, lat, lon, lineNamesArr, stationLines, indexOf,
                 adjPtr, adjTarget, adjWeight, adjRunSlack, dwellSlackSec,
                 xferPtr, xferTarget, xferMin, xferSlack,
                 r, routeStopsPtr, routeStops, tripTimesBase, routeTripCount,
-                tripArrSec, tripDepSec, stopRoutesPtr, stopRoutes, stopRoutePos,
-                pagerank, graphVersion);
+                tripArrSec, tripDepSec, stopRoutesPtr, stopRoutes, stopRoutePos, routeLine,
+                geometry, pagerank, graphVersion);
     }
 }

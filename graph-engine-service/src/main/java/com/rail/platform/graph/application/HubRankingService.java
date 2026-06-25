@@ -28,16 +28,33 @@ public class HubRankingService {
     }
 
     /**
-     * Power-iteration PageRank over the directed CSR adjacency. Dangling nodes
-     * (no out-edges) teleport uniformly so total rank is conserved.
+     * Standard PageRank with a uniform teleport vector — the structural hub score.
      */
     public double[] pageRank(RailTopology t) {
+        return pageRank(t, null);
+    }
+
+    /**
+     * Power-iteration PageRank over the directed CSR adjacency with a configurable
+     * teleport vector. Passing {@code personalization} (a probability vector that
+     * sums to 1) computes <em>personalized</em> PageRank — the PCC's operational
+     * weights bias rank toward boosted lines/stations and away from suppressed
+     * ones, so the hub vector reflects the live picture. {@code null} = uniform
+     * teleport (identical to the structural ranking). Dangling nodes (no out-edges)
+     * teleport along the same vector so total rank is conserved.
+     */
+    public double[] pageRank(RailTopology t, double[] personalization) {
         int n = t.stationCount();
         double[] pr = new double[n];
         if (n == 0) {
             return pr;
         }
-        java.util.Arrays.fill(pr, 1.0 / n);
+        double[] teleport = personalization;
+        if (teleport == null) {
+            teleport = new double[n];
+            java.util.Arrays.fill(teleport, 1.0 / n);
+        }
+        System.arraycopy(teleport, 0, pr, 0, n);
 
         for (int it = 0; it < iterations; it++) {
             double[] next = new double[n];
@@ -55,9 +72,9 @@ public class HubRankingService {
                     }
                 }
             }
-            double base = (1.0 - damping) / n + damping * dangling / n;
             for (int i = 0; i < n; i++) {
-                next[i] = base + damping * next[i];
+                next[i] = (1.0 - damping) * teleport[i]
+                        + damping * (next[i] + dangling * teleport[i]);
             }
             pr = next;
         }

@@ -3,43 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Rail Network — Matrix &amp; Graph</title>
-<style>
-  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#c9d1d9; --accent:#58a6ff; --hot:#f0c674; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
-  header h1 { font-size:16px; margin:0; font-weight:600; }
-  header .meta { color:#8b949e; font-size:12px; }
-  .wrap { display:flex; gap:16px; padding:16px; flex-wrap:wrap; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
-  .panel h2 { font-size:13px; margin:0 0 8px; font-weight:600; color:#e6edf3; }
-  canvas { display:block; background:#0a0d12; border-radius:6px; cursor:crosshair; }
-  #legend, #lines { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
-  .chip { padding:2px 8px; border:1px solid var(--line); border-radius:12px; cursor:pointer; user-select:none; font-size:12px; }
-  .chip.off { opacity:.35; }
-  #tip { position:fixed; pointer-events:none; background:#1c2330; border:1px solid var(--line); border-radius:6px;
-         padding:6px 8px; font-size:12px; display:none; z-index:10; max-width:280px; }
-  .form { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
-  select, input, button { background:#0d1117; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; font-size:12px; }
-  button { cursor:pointer; }
-  button:hover { border-color:var(--accent); }
-  #plan { margin-top:6px; font-size:12px; }
-  #plan .row { padding:3px 0; border-top:1px solid var(--line); }
-  .muted { color:#8b949e; }
-  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:4px; }
-  .matrix-msg { color:#8b949e; font-size:12px; padding:20px; text-align:center; }
-  .search-wrap { position:relative; display:inline-block; width:100%; }
-  .search-wrap input { width:100%; }
-  .search-drop { position:absolute; top:100%; left:0; right:0; max-height:200px; overflow-y:auto; background:#1c2330;
-                  border:1px solid var(--line); border-radius:0 0 6px 6px; z-index:20; display:none; }
-  .search-drop .opt { padding:4px 8px; cursor:pointer; font-size:12px; }
-  .search-drop .opt:hover, .search-drop .opt.hl { background:rgba(88,166,255,.15); }
-  .loading { text-align:center; padding:40px; color:#8b949e; }
-  .loading .spinner { display:inline-block; width:24px; height:24px; border:2px solid #30363d;
-                      border-top-color:#58a6ff; border-radius:50%; animation:spin .8s linear infinite; }
-  @keyframes spin { to { transform:rotate(360deg); } }
-</style>
+<title>Rail Network — Spectral Matrix &amp; Cascade (Mapbox)</title>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css" rel="stylesheet"/>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+<link href="viz.css" rel="stylesheet"/>
 </head>
 <body>
 <header>
@@ -48,317 +15,93 @@
 </header>
 
 <div class="wrap">
+  <!-- ===== MATRIX ===== -->
   <div class="panel" id="matrixPanel">
-    <h2>Adjacency matrix <span class="muted">(stations × stations, line-clustered)</span></h2>
-    <canvas id="matrix" width="560" height="560"></canvas>
-    <div id="matrixMsg"></div>
-    <div id="legend"></div>
+    <h2>Graph operator <span class="muted">(stations × stations, line-clustered)</span></h2>
+    <div class="seg" id="matModes">
+      <button data-m="A" class="on">A · adjacency</button>
+      <button data-m="adjacency">Â · GCN</button>
+      <button data-m="laplacian">L · Laplacian</button>
+      <button data-m="scaled">L̃ · scaled</button>
+    </div>
+    <canvas id="matrix" width="520" height="520"></canvas>
+    <div class="cbar"><span id="cbarLo">·</span><canvas id="cbar" width="180" height="12"></canvas><span id="cbarHi">·</span></div>
+    <div class="mathbox"><div class="eq" id="mathEq">—</div><div id="mathStats"></div></div>
   </div>
 
+  <!-- ===== MAP ===== -->
   <div class="panel">
-    <h2>Network graph <span class="muted">(geographic · node size = PageRank hub score)</span></h2>
-    <canvas id="graph" width="700" height="700"></canvas>
+    <h2>Live network map <span class="muted">(real coordinates · click a station to inject a delay)</span></h2>
+    <div id="map"></div>
     <div id="lines"></div>
   </div>
 
-  <div class="panel" style="min-width:280px;flex:1;">
-    <h2>RAPTOR journey (Engine 1b)</h2>
+  <!-- ===== CONTROLS ===== -->
+  <div class="panel" style="min-width:300px;flex:1;">
+    <h2>Cascade propagation (Engine 1a)</h2>
+    <div class="form">
+      <label style="flex:1;">Inject delay at
+        <div class="search-wrap"><input id="cascSearch" placeholder="Type a station…" autocomplete="off"/><div class="search-drop" id="cascDrop"></div></div>
+        <input type="hidden" id="cascFrom" value=""/>
+      </label>
+    </div>
+    <div class="form">
+      <label>δ₀ <input id="cascDelay" type="number" min="1" max="60" value="10" style="width:56px;"/> min</label>
+      <button id="cascGo" class="act">▶ Propagate</button>
+      <button id="cascClear" class="act">clear</button>
+    </div>
+    <div class="hint">Tip: click any station dot on the map to inject there instantly.</div>
+    <div id="cascStats" class="muted" style="margin-top:8px;">Pick a station and propagate a primary delay to watch it ripple with slack absorption.</div>
+
+    <h2 style="margin-top:16px;">RAPTOR journey (Engine 1b)</h2>
     <div class="form">
       <label style="flex:1;">From
-        <div class="search-wrap">
-          <input id="fromSearch" placeholder="Type to search…" autocomplete="off"/>
-          <div class="search-drop" id="fromDrop"></div>
-        </div>
+        <div class="search-wrap"><input id="fromSearch" placeholder="Type to search…" autocomplete="off"/><div class="search-drop" id="fromDrop"></div></div>
         <input type="hidden" id="from" value=""/>
       </label>
     </div>
     <div class="form">
       <label style="flex:1;">To
-        <div class="search-wrap">
-          <input id="toSearch" placeholder="Type to search…" autocomplete="off"/>
-          <div class="search-drop" id="toDrop"></div>
-        </div>
+        <div class="search-wrap"><input id="toSearch" placeholder="Type to search…" autocomplete="off"/><div class="search-drop" id="toDrop"></div></div>
         <input type="hidden" id="to" value=""/>
       </label>
     </div>
-    <div class="form">
-      <label>Depart <input id="dep" type="time" value="07:00"/></label>
-      <button id="go">Plan</button>
-    </div>
+    <div class="form"><label>Depart <input id="dep" type="time" value="07:00"/></label><button id="go" class="act">Plan</button></div>
     <div id="plan" class="muted">Pick an origin and destination, then Plan to see the Pareto frontier.</div>
-    <h2 style="margin-top:14px;">Top hubs</h2>
+
+    <h2 style="margin-top:14px;">Top hubs <span class="muted">(personalized PageRank)</span></h2>
     <div id="hubs" class="muted">—</div>
+    <div class="pcc">
+      <div class="muted" style="margin:8px 0 4px;">PCC control — operational priority (recomputes the hub ranking)</div>
+      <div class="form">
+        <select id="pccTarget"><option value="LINE">Line</option><option value="STATION">Station idx</option></select>
+        <input id="pccId" placeholder="e.g. B  or  16" style="width:110px;"/>
+        <input id="pccWeight" type="number" step="0.5" min="0" value="0" style="width:60px;" title="0 = closed · 1 = normal · >1 = boost"/>
+        <button id="pccApply" class="act">apply</button>
+        <button id="pccReset" class="act">reset</button>
+      </div>
+      <div class="hint">weight: 0 = closed/suppressed · 1 = normal (clears) · &gt;1 = boosted. Cron also refreshes every 5 min.</div>
+      <div id="pccState" class="muted" style="margin-top:4px;">no overrides</div>
+    </div>
+  </div>
+
+  <!-- ===== DEPARTURE BOARD ===== -->
+  <div class="panel" id="boardPanel" style="min-width:300px;">
+    <h2>Departure board <span class="muted">· next trains, local time</span>
+      <span id="boardClock" class="clock">--:--:--</span></h2>
+    <div class="form">
+      <label style="flex:1;">Station
+        <div class="search-wrap"><input id="boardSearch" placeholder="Type a station…" autocomplete="off"/><div class="search-drop" id="boardDrop"></div></div>
+        <input type="hidden" id="boardStation" value=""/>
+      </label>
+    </div>
+    <div class="hint">Each line ("canal") shows its own next departures and terminus. Click a station on the map to switch boards.</div>
+    <div id="board" class="muted" style="margin-top:8px;">Pick a station to see live departures per line.</div>
   </div>
 </div>
 
 <div id="tip"></div>
 
-<script>
-const tip = document.getElementById('tip');
-function showTip(x, y, html){ tip.innerHTML = html; tip.style.display='block'; tip.style.left=(x+12)+'px'; tip.style.top=(y+12)+'px'; }
-function hideTip(){ tip.style.display='none'; }
-function hms(s){ const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
-  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0'); }
-
-let DATA, ORDER, POS=null, SEL=-1, ACTIVE_LINES=new Set();
-const LARGE_THRESHOLD = 150; // above this, skip matrix rendering
-
-fetch('graph/matrix').then(r => {
-  if(!r.ok) throw new Error('topology not loaded yet (HTTP '+r.status+')');
-  return r.json();
-}).then(init).catch(e => { document.getElementById('summary').textContent = e.message; });
-
-function init(d){
-  DATA = d; ORDER = d.order;
-  document.getElementById('summary').textContent =
-    `${d.stationCount} stations · ${d.edges.length} edges · version ${d.graphVersion}`;
-
-  // line registry
-  const lineSet = new Set();
-  d.stations.forEach(s => s.lines.forEach(l => lineSet.add(l)));
-  const lines = [...lineSet].sort();
-  lines.forEach(l => ACTIVE_LINES.add(l));
-  const lineColors = {};
-  const palette = ['#58a6ff','#f0c674','#7ee787','#ff7b72','#d2a8ff','#79c0ff','#ffa657','#56d4dd',
-                   '#e3b341','#a5d6ff','#f778ba','#3fb950','#bc8cff','#f0883e','#8b949e','#da3633',
-                   '#1f6feb','#238636','#a371f7','#d29922','#8957e5','#bf4b8a','#3d8b8b','#6e7681'];
-  lines.forEach((l,i) => lineColors[l] = palette[i % palette.length]);
-  window.LINE_COLORS = lineColors;
-
-  // line filter chips
-  const lc = document.getElementById('lines'); lc.innerHTML='';
-  lines.forEach(l => {
-    const c = document.createElement('span'); c.className='chip';
-    c.innerHTML = `<span class="swatch" style="background:${lineColors[l]}"></span>${l}`;
-    c.onclick = () => { if(ACTIVE_LINES.has(l)) {ACTIVE_LINES.delete(l); c.classList.add('off');}
-                        else {ACTIVE_LINES.add(l); c.classList.remove('off');} draw(); };
-    lc.appendChild(c);
-  });
-
-  // searchable station dropdowns
-  setupSearchDrop('fromSearch', 'fromDrop', 'from', d.stations);
-  setupSearchDrop('toSearch', 'toDrop', 'to', d.stations);
-  // default: pick 10th station for "to" if available
-  if(d.stations.length > 9) {
-    document.getElementById('to').value = d.stations[9].index;
-    document.getElementById('toSearch').value = d.stations[9].name;
-  }
-
-  document.getElementById('go').onclick = runPlan;
-
-  // Large-network matrix handling
-  if(d.stationCount > LARGE_THRESHOLD) {
-    const mc = document.getElementById('matrix');
-    // Scale matrix canvas for denser view
-    const cellTarget = Math.max(1, Math.floor(800 / d.stationCount));
-    const canvasSize = cellTarget * d.stationCount;
-    mc.width = Math.min(canvasSize, 800);
-    mc.height = mc.width;
-    if(d.stationCount > 500) {
-      mc.style.display = 'none';
-      document.getElementById('matrixMsg').innerHTML =
-        `<div class="matrix-msg">Matrix view disabled for ${d.stationCount} stations (too dense).<br/>Use the geographic graph view instead.</div>`;
-    }
-  }
-
-  buildAdjacency(d);
-  layoutGraph(d);
-  draw();
-  loadHubs();
-}
-
-// ---- Searchable dropdown ----
-function setupSearchDrop(inputId, dropId, hiddenId, stations) {
-  const input = document.getElementById(inputId);
-  const drop = document.getElementById(dropId);
-  const hidden = document.getElementById(hiddenId);
-  let hlIdx = -1;
-
-  function render(query) {
-    const q = query.toLowerCase();
-    const matches = q ? stations.filter(s => s.name.toLowerCase().includes(q)).slice(0, 30)
-                      : stations.slice(0, 30);
-    drop.innerHTML = '';
-    hlIdx = -1;
-    matches.forEach(s => {
-      const div = document.createElement('div');
-      div.className = 'opt';
-      div.textContent = s.name;
-      div.dataset.idx = s.index;
-      div.onclick = () => { hidden.value = s.index; input.value = s.name; drop.style.display = 'none'; };
-      drop.appendChild(div);
-    });
-    drop.style.display = matches.length ? 'block' : 'none';
-  }
-
-  input.addEventListener('focus', () => render(input.value));
-  input.addEventListener('input', () => render(input.value));
-  input.addEventListener('keydown', e => {
-    const opts = drop.querySelectorAll('.opt');
-    if(e.key === 'ArrowDown') { e.preventDefault(); hlIdx = Math.min(hlIdx+1, opts.length-1); updateHl(opts); }
-    else if(e.key === 'ArrowUp') { e.preventDefault(); hlIdx = Math.max(hlIdx-1, 0); updateHl(opts); }
-    else if(e.key === 'Enter' && hlIdx >= 0 && opts[hlIdx]) { e.preventDefault(); opts[hlIdx].click(); }
-    else if(e.key === 'Escape') { drop.style.display = 'none'; }
-  });
-  function updateHl(opts) { opts.forEach((o,i) => o.classList.toggle('hl', i===hlIdx)); }
-  document.addEventListener('click', e => { if(!e.target.closest('.search-wrap')) drop.style.display='none'; });
-}
-
-let ADJ; // map "i,j" -> weight
-function buildAdjacency(d){
-  ADJ = new Map();
-  d.edges.forEach(([a,b,w]) => ADJ.set(a+','+b, w));
-}
-
-function stationActive(s){ return s.lines.length===0 || s.lines.some(l => ACTIVE_LINES.has(l)); }
-
-// ---- matrix ----
-const mc = document.getElementById('matrix'), mctx = mc.getContext('2d');
-function drawMatrix(){
-  if(DATA.stationCount > 500) return; // skip for very large networks
-  const n = DATA.stationCount, size = mc.width, cell = size / n;
-  mctx.clearRect(0,0,size,size);
-  mctx.fillStyle = '#0a0d12'; mctx.fillRect(0,0,size,size);
-  // weight range for color scale
-  let minW=1e9, maxW=0;
-  ADJ.forEach(w => { if(w<minW)minW=w; if(w>maxW)maxW=w; });
-  for(let r=0;r<n;r++){
-    for(let c=0;c<n;c++){
-      const i=ORDER[r], j=ORDER[c];
-      const w = ADJ.get(i+','+j);
-      if(w===undefined) continue;
-      const active = stationActive(DATA.stations[i]) && stationActive(DATA.stations[j]);
-      const t = maxW>minW ? (w-minW)/(maxW-minW) : 0;       // 0 short … 1 long
-      const light = 70 - 45*t;                               // shorter = brighter
-      mctx.fillStyle = active ? `hsl(190,70%,${light}%)` : '#222a33';
-      mctx.fillRect(c*cell, r*cell, Math.ceil(cell), Math.ceil(cell));
-    }
-  }
-  // selection cross-hair
-  if(SEL>=0){
-    const dp = ORDER.indexOf(SEL);
-    mctx.fillStyle='rgba(88,166,255,.18)';
-    mctx.fillRect(0, dp*cell, size, Math.ceil(cell));
-    mctx.fillRect(dp*cell, 0, Math.ceil(cell), size);
-  }
-}
-mc.addEventListener('mousemove', ev => {
-  const n=DATA.stationCount, cell=mc.width/n, b=mc.getBoundingClientRect();
-  const c=Math.floor((ev.clientX-b.left)/cell), r=Math.floor((ev.clientY-b.top)/cell);
-  if(r<0||c<0||r>=n||c>=n){ hideTip(); return; }
-  const i=ORDER[r], j=ORDER[c], w=ADJ.get(i+','+j);
-  if(w===undefined){ hideTip(); return; }
-  showTip(ev.clientX, ev.clientY,
-    `<b>${DATA.stations[i].name}</b> → <b>${DATA.stations[j].name}</b><br/>run ${w}s (${(w/60).toFixed(1)} min)`);
-});
-mc.addEventListener('mouseleave', hideTip);
-
-// ---- graph ----
-const gc = document.getElementById('graph'), gctx = gc.getContext('2d');
-function layoutGraph(d){
-  POS = new Array(d.stationCount);
-  let latMin=90,latMax=-90,lonMin=180,lonMax=-180;
-  d.stations.forEach(s => { latMin=Math.min(latMin,s.lat); latMax=Math.max(latMax,s.lat);
-                            lonMin=Math.min(lonMin,s.lon); lonMax=Math.max(lonMax,s.lon); });
-  const pad=28, W=gc.width-2*pad, H=gc.height-2*pad;
-  const cosLat=Math.cos((latMin+latMax)/2*Math.PI/180);
-  const lonSpan=Math.max(1e-6,(lonMax-lonMin)*cosLat), latSpan=Math.max(1e-6,latMax-latMin);
-  const sc=Math.min(W/lonSpan, H/latSpan);
-  d.stations.forEach(s => {
-    const x = pad + ((s.lon-lonMin)*cosLat)*sc + (W-lonSpan*sc)/2;
-    const y = pad + (latMax-s.lat)*sc + (H-latSpan*sc)/2;
-    POS[s.index] = {x,y};
-  });
-  let prMax=0; d.stations.forEach(s=>prMax=Math.max(prMax,s.pagerank)); window.PR_MAX=prMax;
-}
-function nodeColor(s){ return s.lines.length ? (window.LINE_COLORS[s.lines[0]]||'#58a6ff') : '#8b949e'; }
-function nodeRadius(s){
-  const n = DATA.stationCount;
-  // Adaptive radius: smaller for larger networks
-  const baseMin = n > 300 ? 1.5 : n > 100 ? 2 : 3;
-  const baseScale = n > 300 ? 6 : n > 100 ? 8 : 11;
-  return baseMin + baseScale*Math.sqrt(s.pagerank/(window.PR_MAX||1));
-}
-function drawGraph(){
-  gctx.clearRect(0,0,gc.width,gc.height);
-  const n = DATA.stationCount;
-  // Adaptive edge opacity for large networks
-  const edgeAlpha = n > 300 ? 0.15 : n > 100 ? 0.25 : 0.35;
-  const edgeAlphaDim = n > 300 ? 0.04 : n > 100 ? 0.08 : 0.12;
-  // edges
-  gctx.lineWidth = n > 300 ? 0.5 : 1;
-  DATA.edges.forEach(([a,b]) => {
-    const active = stationActive(DATA.stations[a]) && stationActive(DATA.stations[b]);
-    gctx.strokeStyle = active ? `rgba(120,150,190,${edgeAlpha})` : `rgba(80,90,100,${edgeAlphaDim})`;
-    if(SEL>=0 && (a===SEL||b===SEL)) gctx.strokeStyle='rgba(240,198,116,.9)';
-    gctx.beginPath(); gctx.moveTo(POS[a].x,POS[a].y); gctx.lineTo(POS[b].x,POS[b].y); gctx.stroke();
-  });
-  // nodes
-  DATA.stations.forEach(s => {
-    const active=stationActive(s), p=POS[s.index];
-    gctx.globalAlpha = active?1:.2;
-    gctx.fillStyle = s.index===SEL ? '#fff' : nodeColor(s);
-    gctx.beginPath(); gctx.arc(p.x,p.y,nodeRadius(s),0,7); gctx.fill();
-    if(s.index===SEL){ gctx.strokeStyle='#f0c674'; gctx.lineWidth=2; gctx.stroke(); }
-  });
-  gctx.globalAlpha=1;
-  // For small networks, show labels
-  if(n <= 60) {
-    gctx.font = '9px -apple-system,sans-serif';
-    gctx.fillStyle = '#8b949e';
-    gctx.textAlign = 'center';
-    DATA.stations.forEach(s => {
-      if(!stationActive(s)) return;
-      const p = POS[s.index];
-      gctx.fillText(s.name, p.x, p.y - nodeRadius(s) - 3);
-    });
-  }
-}
-function nearestNode(x,y){
-  let best=-1, bd=1e9;
-  const threshold = DATA.stationCount > 300 ? 200 : 400;
-  DATA.stations.forEach(s => { const p=POS[s.index]; const d=(p.x-x)**2+(p.y-y)**2; if(d<bd){bd=d;best=s.index;} });
-  return bd<threshold ? best : -1;
-}
-gc.addEventListener('mousemove', ev => {
-  const b=gc.getBoundingClientRect(); const id=nearestNode(ev.clientX-b.left, ev.clientY-b.top);
-  if(id<0){ hideTip(); return; }
-  const s=DATA.stations[id];
-  showTip(ev.clientX, ev.clientY,
-    `<b>${s.name}</b><br/>lines: ${s.lines.join(', ')||'—'}<br/>hub score: ${s.pagerank.toFixed(4)}`);
-});
-gc.addEventListener('mouseleave', hideTip);
-gc.addEventListener('click', ev => {
-  const b=gc.getBoundingClientRect(); const id=nearestNode(ev.clientX-b.left, ev.clientY-b.top);
-  SEL = (id===SEL) ? -1 : id; draw();
-});
-
-function draw(){ drawMatrix(); drawGraph(); }
-
-// ---- RAPTOR ----
-function runPlan(){
-  const from=+document.getElementById('from').value, to=+document.getElementById('to').value;
-  if(isNaN(from) || isNaN(to) || from===to) {
-    document.getElementById('plan').innerHTML = '<span class="muted">Select different origin and destination stations.</span>';
-    return;
-  }
-  const [h,m]=document.getElementById('dep').value.split(':').map(Number);
-  const dep=h*3600+m*60;
-  const el=document.getElementById('plan'); el.textContent='planning…';
-  fetch(`graph/plan?from=${from}&to=${to}&departure=${dep}`).then(r=>r.json()).then(p=>{
-    if(!p.frontier || !p.frontier.length){ el.innerHTML='<span class="muted">unreachable within the round bound.</span>'; return; }
-    el.innerHTML = p.frontier.map(f =>
-      `<div class="row"><b>${f.transfers}</b> transfer${f.transfers===1?'':'s'} → arrive <b>${hms(f.arrivalSec)}</b>
-       <span class="muted">(${((f.arrivalSec-dep)/60).toFixed(0)} min)</span></div>`).join('');
-  }).catch(()=>el.textContent='plan failed');
-}
-
-function loadHubs(){
-  fetch('graph/stats').then(r=>r.json()).then(s=>{
-    document.getElementById('hubs').innerHTML = s.topHubs.map((h,i)=>
-      `${i+1}. ${h.name} <span class="muted">${h.pagerank.toFixed(4)}</span>`).join('<br/>');
-  }).catch(()=>{});
-}
-</script>
+<script src="viz.js"></script>
 </body>
 </html>

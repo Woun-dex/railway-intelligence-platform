@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -41,16 +42,19 @@ public class GtfsTopologyLoader {
     private final SlackModel slackModel;
     private final String defaultLocation;
     private final Set<Integer> defaultRouteTypes;
+    private final Set<String> lineAllowList;
     private final int transferDefaultSec;
 
     public GtfsTopologyLoader(ResourceLoader resourceLoader, SlackModel slackModel,
                               @Value("${rail.graph.gtfs.path}") String defaultLocation,
                               @Value("${rail.graph.gtfs.route-types:2}") String routeTypes,
+                              @Value("${rail.graph.gtfs.lines:A,B,C,D,E,H,J,K,L,N,P,R,U,V}") String lines,
                               @Value("${rail.graph.slack.transfer-default-sec:120}") int transferDefaultSec) {
         this.resourceLoader = resourceLoader;
         this.slackModel = slackModel;
         this.defaultLocation = defaultLocation;
         this.defaultRouteTypes = parseRouteTypes(routeTypes);
+        this.lineAllowList = parseLines(lines);
         this.transferDefaultSec = transferDefaultSec;
     }
 
@@ -116,12 +120,28 @@ public class GtfsTopologyLoader {
         Map<String, RouteRow> routes = readRoutes(source, routeTypes);
         log.info("GTFS routes: {} kept (route_types={})", routes.size(), routeTypes);
         // ---- trips on those routes -----------------------------------------
-        Map<String, String> tripRoute = readTrips(source, routes.keySet()); // trip_id -> route_id
-        log.info("GTFS trips: {} kept for {} routes", tripRoute.size(), routes.size());
+        Map<String, String> tripShape = new HashMap<>();                      // trip_id -> shape_id
+        Map<String, String> tripRoute = readTrips(source, routes.keySet(), tripShape); // trip_id -> route_id
+        log.info("GTFS trips: {} kept for {} routes ({} with shapes)",
+                tripRoute.size(), routes.size(), tripShape.size());
 
         // ---- stop_times grouped by trip ------------------------------------
         Map<String, List<StopTime>> byTrip = readStopTimes(source, tripRoute.keySet());
         log.info("GTFS stop_times: {} trips with stop sequences loaded", byTrip.size());
+
+        // ---- shapes for kept trips (real track geometry, optional) ---------
+        Set<String> neededShapes = new java.util.HashSet<>();
+        for (String tripId : byTrip.keySet()) {
+            String sh = tripShape.get(tripId);
+            if (sh != null) {
+                neededShapes.add(sh);
+            }
+        }
+        Map<String, double[][]> shapes = readShapes(source, neededShapes);
+        log.info("GTFS shapes.txt: {} polylines loaded for {} referenced shapes",
+                shapes.size(), neededShapes.size());
+        Set<String> shapesProjected = new java.util.HashSet<>();
+        Map<Long, float[]> segmentGeom = new LinkedHashMap<>();
 
         Map<Long, Stat> segStats = new HashMap<>();
         Map<Integer, Stat> dwellStats = new HashMap<>();
@@ -150,6 +170,16 @@ public class GtfsTopologyLoader {
                 b.line(idx, lineName);
             }
             b.trip(lineName, seq, arr, dep);
+
+            // Real track geometry: project this trip's stations onto its shape and
+            // slice the polyline per consecutive station pair. Done once per shape.
+            String shapeId = tripShape.get(e.getKey());
+            if (shapeId != null && shapesProjected.add(shapeId)) {
+                double[][] poly = shapes.get(shapeId);
+                if (poly != null && poly.length >= 2) {
+                    projectSegments(seq, b, poly, segmentGeom);
+                }
+            }
 
             // Segment running time and interior dwell statistics.
             for (int i = 0; i < n - 1; i++) {
@@ -180,6 +210,9 @@ public class GtfsTopologyLoader {
 
         // ---- transfers -----------------------------------------------------
         readTransfers(source, stops, b, stationIdx);
+
+        b.geometry(segmentGeom);
+        log.info("GTFS geometry: {} directed station segments carry real track curvature", segmentGeom.size());
 
         b.graphVersion("g-" + Instant.now().getEpochSecond());
 
@@ -218,7 +251,16 @@ public class GtfsTopologyLoader {
                 if (!routeTypes.contains(type)) {
                     return;
                 }
-                String name = r.get("route_short_name");
+                String shortName = r.get("route_short_name");
+                // Line allow-list: in the full IDFM feed, route_type=2 (Rail) also
+                // includes TER/Intercités lines that sprawl across France. Keeping
+                // only the Transilien/RER commercial codes isolates the ~392-station
+                // Île-de-France network. Empty allow-list = keep every rail route.
+                if (!lineAllowList.isEmpty()
+                        && !lineAllowList.contains(shortName.trim().toUpperCase(Locale.ROOT))) {
+                    return;
+                }
+                String name = shortName;
                 if (name.isEmpty()) {
                     name = r.get("route_long_name");
                 }
@@ -231,17 +273,62 @@ public class GtfsTopologyLoader {
         return routes;
     }
 
-    private Map<String, String> readTrips(GtfsSource source, Set<String> keptRoutes) throws IOException {
+    private Map<String, String> readTrips(GtfsSource source, Set<String> keptRoutes,
+                                          Map<String, String> tripShapeOut) throws IOException {
         Map<String, String> tripRoute = new LinkedHashMap<>();
         try (InputStream in = require(source, "trips.txt")) {
             GtfsCsvReader.forEach(in, r -> {
                 String routeId = r.get("route_id");
                 if (keptRoutes.contains(routeId)) {
-                    tripRoute.put(r.get("trip_id"), routeId);
+                    String tripId = r.get("trip_id");
+                    tripRoute.put(tripId, routeId);
+                    String shapeId = r.get("shape_id");
+                    if (!shapeId.isEmpty()) {
+                        tripShapeOut.put(tripId, shapeId);
+                    }
                 }
             });
         }
         return tripRoute;
+    }
+
+    /**
+     * Reads {@code shapes.txt} for the requested shape ids into ordered
+     * {@code [lon, lat]} polylines. Returns an empty map when the feed has no
+     * shapes — geometry is optional and consumers fall back to straight segments.
+     */
+    private Map<String, double[][]> readShapes(GtfsSource source, Set<String> needed) throws IOException {
+        if (needed.isEmpty() || !source.has("shapes.txt")) {
+            return Map.of();
+        }
+        Map<String, List<double[]>> acc = new HashMap<>();
+        try (InputStream in = source.open("shapes.txt")) {
+            if (in == null) {
+                return Map.of();
+            }
+            GtfsCsvReader.forEach(in, r -> {
+                String id = r.get("shape_id");
+                if (id.isEmpty() || !needed.contains(id)) {
+                    return;
+                }
+                double lat = parseDouble(r.get("shape_pt_lat"));
+                double lon = parseDouble(r.get("shape_pt_lon"));
+                int seq = r.getInt("shape_pt_sequence", 0);
+                // [lon, lat, sequence] — sorted by sequence after collection.
+                acc.computeIfAbsent(id, k -> new ArrayList<>()).add(new double[] {lon, lat, seq});
+            });
+        }
+        Map<String, double[][]> shapes = new HashMap<>();
+        for (Map.Entry<String, List<double[]>> e : acc.entrySet()) {
+            List<double[]> pts = e.getValue();
+            pts.sort((a, b) -> Double.compare(a[2], b[2]));
+            double[][] poly = new double[pts.size()][];
+            for (int i = 0; i < pts.size(); i++) {
+                poly[i] = new double[] {pts.get(i)[0], pts.get(i)[1]};
+            }
+            shapes.put(e.getKey(), poly);
+        }
+        return shapes;
     }
 
     private Map<String, List<StopTime>> readStopTimes(GtfsSource source, Set<String> keptTrips) throws IOException {
@@ -282,12 +369,16 @@ public class GtfsTopologyLoader {
             GtfsCsvReader.forEach(in, r -> {
                 String from = r.get("from_stop_id");
                 String to = r.get("to_stop_id");
-                if (from.isEmpty() || to.isEmpty() || !stops.containsKey(from) || !stops.containsKey(to)) {
+                if (from.isEmpty() || to.isEmpty()) {
                     return;
                 }
-                int fi = stationFor(from, stops, b, stationIdx);
-                int ti = stationFor(to, stops, b, stationIdx);
-                if (fi == ti) {
+                // Only connect stations already discovered from rail trips. The full
+                // IDFM transfers.txt links every mode's stops; resolving them through
+                // stationFor() would register thousands of bus/metro/tram stations
+                // that no kept rail trip ever visits.
+                Integer fi = existingStation(from, stops, stationIdx);
+                Integer ti = existingStation(to, stops, stationIdx);
+                if (fi == null || ti == null || fi.equals(ti)) {
                     return;
                 }
                 int min = r.getInt("min_transfer_time", transferDefaultSec);
@@ -334,6 +425,25 @@ public class GtfsTopologyLoader {
         return idx;
     }
 
+    /**
+     * Resolves a stop to an <em>already-registered</em> station index without
+     * creating a new one. Checks the stop id directly, then its parent station.
+     * Returns {@code null} if neither has been seen — used by the transfers pass
+     * so it never introduces stations that no kept trip visits.
+     */
+    private static Integer existingStation(String stopId, Map<String, StopRow> stops,
+                                           Map<String, Integer> stationIdx) {
+        Integer direct = stationIdx.get(stopId);
+        if (direct != null) {
+            return direct;
+        }
+        StopRow row = stops.get(stopId);
+        if (row != null && !row.parent().isEmpty()) {
+            return stationIdx.get(row.parent());
+        }
+        return null;
+    }
+
     private static InputStream require(GtfsSource source, String name) throws IOException {
         InputStream in = source.open(name);
         if (in == null) {
@@ -368,8 +478,91 @@ public class GtfsTopologyLoader {
                 .collect(Collectors.toSet());
     }
 
+    /** Parse the line allow-list (route_short_name codes), upper-cased. */
+    static Set<String> parseLines(String csv) {
+        if (csv == null) {
+            return Set.of();
+        }
+        return Arrays.stream(csv.split(","))
+                .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toSet());
+    }
+
     private static long key(int from, int to) {
         return (((long) from) << 32) | (to & 0xffffffffL);
+    }
+
+    /**
+     * Projects a trip's ordered stations onto its shape polyline and stores the
+     * sliced track curve for each consecutive station pair (first-wins). The
+     * shape is oriented to the direction of travel first (feeds often store one
+     * shape used in both directions). Pairs whose stations land on adjacent shape
+     * points carry no interior curve and are left to the straight-line fallback.
+     */
+    private static void projectSegments(int[] seq, RailTopologyBuilder b,
+                                        double[][] poly, Map<Long, float[]> out) {
+        int n = seq.length;
+        int m = poly.length;
+
+        // Orient the shape to travel direction using the unconstrained endpoints.
+        int pFirst = nearest(poly, b.stationLon(seq[0]), b.stationLat(seq[0]), 0);
+        int pLast = nearest(poly, b.stationLon(seq[n - 1]), b.stationLat(seq[n - 1]), 0);
+        if (pFirst > pLast) {
+            double[][] rev = new double[m][];
+            for (int i = 0; i < m; i++) {
+                rev[i] = poly[m - 1 - i];
+            }
+            poly = rev;
+        }
+
+        // Monotonic forward projection so slices advance along the track.
+        int[] proj = new int[n];
+        int last = 0;
+        for (int i = 0; i < n; i++) {
+            proj[i] = nearest(poly, b.stationLon(seq[i]), b.stationLat(seq[i]), last);
+            last = proj[i];
+        }
+
+        for (int i = 0; i < n - 1; i++) {
+            int a = proj[i];
+            int c = proj[i + 1];
+            if (c - a < 2) {
+                continue; // no interior shape points -> straight segment suffices
+            }
+            long k = key(seq[i], seq[i + 1]);
+            if (out.containsKey(k)) {
+                continue;
+            }
+            int interior = c - a - 1;
+            float[] flat = new float[(interior + 2) * 2];
+            int w = 0;
+            flat[w++] = (float) b.stationLon(seq[i]);
+            flat[w++] = (float) b.stationLat(seq[i]);
+            for (int p = a + 1; p < c; p++) {
+                flat[w++] = (float) poly[p][0];
+                flat[w++] = (float) poly[p][1];
+            }
+            flat[w++] = (float) b.stationLon(seq[i + 1]);
+            flat[w] = (float) b.stationLat(seq[i + 1]);
+            out.put(k, flat);
+        }
+    }
+
+    /** Index of the shape point nearest {@code (lon, lat)}, scanning from {@code from}. */
+    private static int nearest(double[][] poly, double lon, double lat, int from) {
+        int best = from;
+        double bestD = Double.MAX_VALUE;
+        for (int p = from; p < poly.length; p++) {
+            double dlo = poly[p][0] - lon;
+            double dla = poly[p][1] - lat;
+            double dd = dlo * dlo + dla * dla;
+            if (dd < bestD) {
+                bestD = dd;
+                best = p;
+            }
+        }
+        return best;
     }
 
     private static int parseTime(String hhmmss) {

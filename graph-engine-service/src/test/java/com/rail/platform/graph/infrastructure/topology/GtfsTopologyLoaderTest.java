@@ -12,12 +12,15 @@ import com.rail.platform.graph.domain.model.RailTopology;
 
 class GtfsTopologyLoaderTest {
 
+    private static final String TRANSILIEN_LINES = "A,B,C,D,E,H,J,K,L,N,P,R,U,V";
+
     private GtfsTopologyLoader loader() {
         return new GtfsTopologyLoader(
                 new DefaultResourceLoader(),
                 new SlackModel(600, 180, 120),
                 "classpath:gtfs/transilien-sample",
                 "2",
+                TRANSILIEN_LINES,
                 120);
     }
 
@@ -87,6 +90,7 @@ class GtfsTopologyLoaderTest {
                 new SlackModel(600, 180, 120),
                 "file:" + IDFM_PATH,
                 "2",
+                TRANSILIEN_LINES,
                 120);
     }
 
@@ -95,10 +99,13 @@ class GtfsTopologyLoaderTest {
     void loadsFullIdfmFeed() {
         RailTopology t = idfmLoader().load();
 
-        // The real IDFM rail network should have well over 200 stations
-        assertThat(t.stationCount()).isGreaterThan(200);
-        // At least 20 rail routes (RER A-E, Transilien H/J/K/L/N/P/R/U/V, TER)
-        assertThat(t.routeCount()).isGreaterThanOrEqualTo(20);
+        // Restricted to RER A-E + Transilien H/J/K/L/N/P/R/U/V, the real network
+        // is ~392 stations. The band is wide enough to absorb feed revisions but
+        // tight enough to prove TER/Intercités stations were excluded (route_type=2
+        // alone would yield several thousand stations across France).
+        assertThat(t.stationCount()).isBetween(300, 550);
+        // Each commercial line typically maps to several GTFS route_ids (branches).
+        assertThat(t.routeCount()).isGreaterThanOrEqualTo(13);
         assertThat(t.edgeCount()).isGreaterThan(t.stationCount());
     }
 

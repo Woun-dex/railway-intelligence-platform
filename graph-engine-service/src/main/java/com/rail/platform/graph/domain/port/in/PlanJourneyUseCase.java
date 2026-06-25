@@ -1,5 +1,6 @@
 package com.rail.platform.graph.domain.port.in;
 
+import com.rail.platform.graph.domain.model.JourneyPath;
 import com.rail.platform.graph.domain.model.JourneyPlan;
 import com.rail.platform.graph.domain.model.JourneyQuery;
 
@@ -10,4 +11,10 @@ import com.rail.platform.graph.domain.model.JourneyQuery;
 public interface PlanJourneyUseCase {
 
     JourneyPlan plan(JourneyQuery query);
+
+    /**
+     * Reconstruct the concrete earliest-arrival journey (leg-by-leg path) for the
+     * query — used by the viewer to draw the route on the map.
+     */
+    JourneyPath planPath(JourneyQuery query);
 }

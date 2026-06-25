@@ -97,6 +97,8 @@ services:
         create rail.graph.cascade   22
         create rail.predictions.stgcn 22
         create rail.decisions.topk  22
+        # Passenger-information / display feed (keyed by line "canal")
+        create rail.display         22
         echo "All topics created."
         kafka-topics --bootstrap-server kafka:29092 --list
 

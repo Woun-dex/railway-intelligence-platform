@@ -76,6 +76,10 @@ public final class RailTopology implements Serializable {
     private final int[] stopRoutesPtr;      // length stationCount + 1
     private final int[] stopRoutes;         // route indices serving each stop
     private final int[] stopRoutePos;       // position of the stop within that route
+    private final int[] routeLine;          // length routeCount (commercial line index per route)
+
+    // ---- Display geometry (track curvature for the viewer) -----------------
+    private final NetworkGeometry geometry;
 
     // ---- Hub vector + meta -------------------------------------------------
     private final double[] pagerank;        // length stationCount
@@ -91,7 +95,8 @@ public final class RailTopology implements Serializable {
                  int routeCount, int[] routeStopsPtr, int[] routeStops,
                  int[] tripTimesBase, int[] routeTripCount,
                  int[] tripArrSec, int[] tripDepSec,
-                 int[] stopRoutesPtr, int[] stopRoutes, int[] stopRoutePos,
+                 int[] stopRoutesPtr, int[] stopRoutes, int[] stopRoutePos, int[] routeLine,
+                 NetworkGeometry geometry,
                  double[] pagerank, String graphVersion) {
         this.stationCount = stationCount;
         this.stopId = stopId;
@@ -120,6 +125,8 @@ public final class RailTopology implements Serializable {
         this.stopRoutesPtr = stopRoutesPtr;
         this.stopRoutes = stopRoutes;
         this.stopRoutePos = stopRoutePos;
+        this.routeLine = routeLine;
+        this.geometry = geometry;
         this.pagerank = pagerank;
         this.graphVersion = graphVersion;
     }
@@ -209,6 +216,14 @@ public final class RailTopology implements Serializable {
 
     public int stopRoutePos(int sr) { return stopRoutePos[sr]; }
 
+    /** Commercial line index (into {@link #lineNames()}) for a RAPTOR route. */
+    public int routeLine(int route) { return routeLine[route]; }
+
+    // ---- Display geometry --------------------------------------------------
+
+    /** Track polylines between adjacent stations (never null; may be empty). */
+    public NetworkGeometry geometry() { return geometry; }
+
     // ---- Hub vector + meta -------------------------------------------------
 
     public double pagerank(int station) { return pagerank[station]; }
@@ -227,7 +242,7 @@ public final class RailTopology implements Serializable {
                 stationLines, indexOf, adjPtr, adjTarget, adjWeightSec, adjRunSlackSec,
                 dwellSlackSec, xferPtr, xferTarget, xferMinSec, xferSlackSec,
                 routeCount, routeStopsPtr, routeStops, tripTimesBase, routeTripCount,
-                tripArrSec, tripDepSec, stopRoutesPtr, stopRoutes, stopRoutePos,
-                newPagerank, graphVersion);
+                tripArrSec, tripDepSec, stopRoutesPtr, stopRoutes, stopRoutePos, routeLine,
+                geometry, newPagerank, graphVersion);
     }
 }

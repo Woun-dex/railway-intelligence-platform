@@ -2,6 +2,7 @@ package com.rail.platform.graph;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Engine 1 — the memory-localized graph computation layer.
@@ -18,6 +19,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * </ul>
  */
 @SpringBootApplication
+@EnableScheduling
 public class GraphEngineApplication {
 
     public static void main(String[] args) {

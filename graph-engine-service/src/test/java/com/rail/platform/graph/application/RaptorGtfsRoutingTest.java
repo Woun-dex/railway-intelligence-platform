@@ -27,7 +27,7 @@ class RaptorGtfsRoutingTest {
 
     private RailTopology sample() {
         return new GtfsTopologyLoader(new DefaultResourceLoader(), new SlackModel(600, 180, 120),
-                "classpath:gtfs/transilien-sample", "2", 120).load();
+                "classpath:gtfs/transilien-sample", "2", "A,B,C,D,E,H,J,K,L,N,P,R,U,V", 120).load();
     }
 
     private RaptorRouter router(RailTopology t) {
