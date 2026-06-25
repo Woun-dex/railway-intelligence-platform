@@ -19,16 +19,35 @@ let map = null, MAP_READY = false, CASCADE = null, JOURNEY = null, popup = null;
 let GEOM = null;
 function nowLocalSec() { const d = new Date(); return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds(); }
 
+// ---- terminal boot log + live telemetry (real, not decorative) ----
+function bootLog(msg, kind) {
+  const el = $("cascStats"); if (!el || el.querySelector(".casc-stats")) return; // don't clobber a cascade result
+  const col = kind === "ok" ? "#3fb950" : kind === "act" ? "#58a6ff" : kind === "err" ? "#f85149" : "";
+  const ts = hms(nowLocalSec());
+  const tag = kind === "ok" ? "[INFO]" : kind === "act" ? "[ACTION]" : kind === "err" ? "[ERR]" : "[LOG]";
+  el.insertAdjacentHTML("beforeend", `<span style="color:${col || ""}" class="${col ? "" : "muted"}">${tag} ${ts} — ${msg}</span><br/>`);
+  el.scrollTop = el.scrollHeight;
+}
+function setUplink(ok, ms) {
+  const dot = $("uplinkDot"), txt = $("uplinkText"), lat = $("latency");
+  if (txt) txt.textContent = ok ? "Uplink stable" : "Uplink lost";
+  if (dot) dot.style.background = ok ? "var(--green)" : "#f85149";
+  if (lat && ms != null) lat.textContent = Math.round(ms) + "ms";
+}
+
+bootLog("connecting to graph-engine…");
+const _t0 = performance.now();
 fetch("graph/matrix")
-  .then((r) => { if (!r.ok) throw new Error("topology not loaded yet (HTTP " + r.status + ")"); return r.json(); })
+  .then((r) => { if (!r.ok) throw new Error("topology not loaded yet (HTTP " + r.status + ")"); setUplink(true, performance.now() - _t0); return r.json(); })
   .then(init)
-  .catch((e) => { $("summary").textContent = e.message; });
+  .catch((e) => { $("summary").textContent = e.message; setUplink(false); bootLog(e.message, "err"); });
 
 async function init(d) {
   DATA = d; ORDER = d.order;
   // Resolve the Mapbox token from the backend env if not provided via URL/localStorage.
   if (!MAPBOX_TOKEN) { try { MAPBOX_TOKEN = (await fetch("graph/config").then((r) => r.json())).mapboxToken || ""; } catch (e) { /* map shows a token hint */ } }
   $("summary").textContent = `${d.stationCount} stations · ${d.edges.length} edges · version ${d.graphVersion}`;
+  bootLog(`topology loaded — ${d.stationCount} stations, ${d.edges.length} edges`, "ok");
   const lineSet = new Set(); d.stations.forEach((s) => s.lines.forEach((l) => lineSet.add(l)));
   const lines = [...lineSet].sort(); lines.forEach((l) => ACTIVE_LINES.add(l));
   const palette = ["#58a6ff","#f0c674","#7ee787","#ff7b72","#d2a8ff","#79c0ff","#ffa657","#56d4dd",
@@ -41,7 +60,7 @@ async function init(d) {
     c.onclick = () => {
       if (ACTIVE_LINES.has(l)) { ACTIVE_LINES.delete(l); c.classList.add("off"); }
       else { ACTIVE_LINES.add(l); c.classList.remove("off"); }
-      applyLineFilter(); drawMatrix();
+      applyLineFilter(); drawMatrix(); updateNetworkLoad();
     };
     lcDiv.appendChild(c);
   });
@@ -64,6 +83,33 @@ async function init(d) {
   const mc = $("matrix");
   if (d.stationCount > 150) { const cell = Math.max(1, Math.floor(560 / d.stationCount)); mc.width = Math.min(cell * d.stationCount, 560); mc.height = mc.width; }
   buildAdjacency(d); drawMatrix(); initMap(d); loadHubs();
+  updateNetworkLoad(); bootLog("select a station to inject a delay", "act");
+  setInterval(pingLatency, 8000);
+}
+
+// NETWORK LOAD = fraction of the network currently engaged.
+//   • during a cascade → stations hit / total   (operational impact)
+//   • otherwise        → active stations under the line filter / total
+function updateNetworkLoad() {
+  if (!DATA) return;
+  let pct, label;
+  if (CASCADE) { pct = 100 * (CASCADE.affected.length + 1) / DATA.stationCount; label = "CASCADE IMPACT"; }
+  else {
+    const active = DATA.stations.filter(stationActive).length;
+    pct = 100 * active / DATA.stationCount; label = "NETWORK LOAD";
+  }
+  const fill = $("slFill"), val = $("slValue"), title = $("slTitle");
+  if (fill) fill.style.width = clamp(pct, 0, 100).toFixed(1) + "%";
+  if (val) val.textContent = pct.toFixed(1) + "%";
+  if (title) title.textContent = label;
+}
+
+// real RTT to the backend — drives the footer latency + uplink dot
+function pingLatency() {
+  const t = performance.now();
+  fetch("graph/config", { cache: "no-store" })
+    .then((r) => { if (!r.ok) throw 0; setUplink(true, performance.now() - t); })
+    .catch(() => setUplink(false));
 }
 
 // ---- search dropdown ----
@@ -152,8 +198,8 @@ function updateMathBox(lo, hi) {
   $("cbarLo").textContent = lo; $("cbarHi").textContent = hi;
 }
 mc.addEventListener("mousemove", (ev) => {
-  const n = DATA.stationCount, cell = mc.width / n, b = mc.getBoundingClientRect();
-  const c = Math.floor((ev.clientX - b.left) / cell), r = Math.floor((ev.clientY - b.top) / cell);
+  const n = DATA.stationCount, b = mc.getBoundingClientRect(), cellCSS = b.width / n;
+  const c = Math.floor((ev.clientX - b.left) / cellCSS), r = Math.floor((ev.clientY - b.top) / cellCSS);
   if (r < 0 || c < 0 || r >= n || c >= n) { hideTip(); return; }
   const i = ORDER[r], j = ORDER[c], v = currentCell(i, j); if (v === null) { hideTip(); return; }
   const val = MAT_MODE === "A" ? `run ${v}s (${(v / 60).toFixed(1)} min)` : `${MAT_MODE === "scaled" ? "L̃" : MAT_MODE === "laplacian" ? "L" : "Â"}ᵢⱼ = ${v.toFixed(4)}`;
@@ -180,7 +226,7 @@ function stationsGeoJSON(d) {
     type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] },
     properties: { index: s.index, name: s.name, line0: s.lines[0] || "—", lines: s.lines.join(", ") || "—",
       color: s.lines.length ? (window.LINE_COLORS[s.lines[0]] || "#58a6ff") : "#8b949e",
-      r: 3 + 9 * Math.sqrt(s.pagerank / (prMax || 1)), hub: s.pagerank } })) };
+      r: 2 + 4 * Math.sqrt(s.pagerank / (prMax || 1)), hub: s.pagerank } })) };
 }
 function edgesGeoJSON(d) {
   return { type: "FeatureCollection", features: d.edges.map(([a, b]) => {
@@ -218,11 +264,15 @@ function initMap(d) {
     map.addSource("journey", { type: "geojson", data: empty() });
     map.addSource("journey-pts", { type: "geojson", data: empty() });
 
-    // soft glow under the network for depth
-    map.addLayer({ id: "edges-glow", type: "line", source: "edges",
-      paint: { "line-color": ["get", "color"], "line-width": 3.5, "line-blur": 3, "line-opacity": 0.12 } });
+    // subtle outer glow for depth
+    map.addLayer({ id: "edges-glow-outer", type: "line", source: "edges",
+      paint: { "line-color": ["get", "color"], "line-width": 6, "line-blur": 5, "line-opacity": 0.08 } });
+    // tighter inner glow
+    map.addLayer({ id: "edges-glow-inner", type: "line", source: "edges",
+      paint: { "line-color": ["get", "color"], "line-width": 2.5, "line-blur": 1.5, "line-opacity": 0.25 } });
+    // solid core line
     map.addLayer({ id: "edges", type: "line", source: "edges",
-      paint: { "line-color": ["get", "color"], "line-width": 1, "line-opacity": 0.4 } });
+      paint: { "line-color": ["get", "color"], "line-width": 1.2, "line-opacity": 0.7 } });
 
     map.addLayer({ id: "cascade-glow", type: "circle", source: "cascade",
       paint: { "circle-radius": ["interpolate", ["linear"], ["get", "frac"], 0, 10, 1, 34],
@@ -240,7 +290,7 @@ function initMap(d) {
 
     map.addLayer({ id: "stations", type: "circle", source: "stations",
       paint: { "circle-radius": ["get", "r"], "circle-color": ["get", "color"],
-        "circle-stroke-width": 0.6, "circle-stroke-color": "#0d1117", "circle-opacity": 0.9 } });
+        "circle-stroke-width": 0.5, "circle-stroke-color": "#0d1117", "circle-opacity": 0.85 } });
 
     map.addLayer({ id: "cascade", type: "circle", source: "cascade",
       paint: { "circle-radius": ["interpolate", ["linear"], ["get", "frac"], 0, 4, 1, 11],
@@ -275,13 +325,13 @@ function initMap(d) {
 function applyLineFilter() {
   if (!MAP_READY) return; const arr = [...ACTIVE_LINES];
   const fil = ["any", ["==", ["get", "line0"], "—"], ["in", ["get", "line0"], ["literal", arr]]];
-  map.setFilter("stations", fil); map.setFilter("edges", fil); map.setFilter("edges-glow", fil);
+  map.setFilter("stations", fil); map.setFilter("edges", fil); map.setFilter("edges-glow-inner", fil); map.setFilter("edges-glow-outer", fil);
 }
 
 // =====================================================================
 //  CASCADE — /graph/propagate then animate on the map
 // =====================================================================
-function clearCascade() { CASCADE = null; if (MAP_READY) map.getSource("cascade").setData(empty()); $("cascStats").innerHTML = '<span class="muted">cleared.</span>'; }
+function clearCascade() { CASCADE = null; if (MAP_READY) map.getSource("cascade").setData(empty()); $("cascStats").innerHTML = '<span class="muted">cleared.</span>'; updateNetworkLoad(); }
 function cascadeFeatures(reveal) {
   const C = CASCADE, f = [];
   f.push({ type: "Feature", geometry: { type: "Point", coordinates: coord(C.source) }, properties: { src: true, frac: 1, missed: false } });
@@ -297,6 +347,7 @@ function runCascade(from) {
     let maxDelay = 0, maxHop = 0, slackSum = 0, missed = 0; const byIndex = new Map();
     res.forEach((a) => { byIndex.set(a.stationIndex, a); maxDelay = Math.max(maxDelay, a.propagatedDelaySec); maxHop = Math.max(maxHop, a.hop); slackSum += a.absorbedSlackSec; if (a.missedConnection) missed++; });
     CASCADE = { byIndex, affected: res, source: from, maxDelay: maxDelay || 1, maxHop, start: performance.now() };
+    updateNetworkLoad();
     const name = DATA.stations[from].name;
     $("cascStats").innerHTML =
       `<div class="casc-stats">` +
@@ -322,7 +373,29 @@ function animateCascade() {
 // =====================================================================
 //  RAPTOR — frontier (/plan) + drawn journey (/journey)
 // =====================================================================
-function clearJourney() { JOURNEY = null; if (MAP_READY) { map.getSource("journey").setData(empty()); map.getSource("journey-pts").setData(empty()); } }
+// Dim the base network to grey when a journey is shown so the route pops
+function dimNetwork() {
+  if (!MAP_READY) return;
+  map.setPaintProperty("stations", "circle-color", "#3a3f47");
+  map.setPaintProperty("stations", "circle-opacity", 0.35);
+  map.setPaintProperty("edges", "line-color", "#2a2f38");
+  map.setPaintProperty("edges", "line-opacity", 0.25);
+  map.setPaintProperty("edges-glow-inner", "line-color", "#2a2f38");
+  map.setPaintProperty("edges-glow-inner", "line-opacity", 0.08);
+  map.setPaintProperty("edges-glow-outer", "line-opacity", 0);
+}
+// Restore vivid colors when journey is cleared
+function restoreNetwork() {
+  if (!MAP_READY) return;
+  map.setPaintProperty("stations", "circle-color", ["get", "color"]);
+  map.setPaintProperty("stations", "circle-opacity", 0.85);
+  map.setPaintProperty("edges", "line-color", ["get", "color"]);
+  map.setPaintProperty("edges", "line-opacity", 0.7);
+  map.setPaintProperty("edges-glow-inner", "line-color", ["get", "color"]);
+  map.setPaintProperty("edges-glow-inner", "line-opacity", 0.25);
+  map.setPaintProperty("edges-glow-outer", "line-opacity", 0.08);
+}
+function clearJourney() { JOURNEY = null; if (MAP_READY) { map.getSource("journey").setData(empty()); map.getSource("journey-pts").setData(empty()); restoreNetwork(); } }
 function drawJourney(path) {
   if (!MAP_READY || !path.reachable || !path.legs.length) { clearJourney(); return; }
   JOURNEY = path;
@@ -341,6 +414,9 @@ function drawJourney(path) {
   }
   const last = path.legs[path.legs.length - 1].stops[path.legs[path.legs.length - 1].stops.length - 1];
   pts.push({ type: "Feature", geometry: { type: "Point", coordinates: coord(last) }, properties: { color: "#f85149" } }); // alight
+
+  // Dim the base network so the journey route stands out
+  dimNetwork();
 
   map.getSource("journey").setData({ type: "FeatureCollection", features: legFeats });
   map.getSource("journey-pts").setData({ type: "FeatureCollection", features: pts });

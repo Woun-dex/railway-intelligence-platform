@@ -96,11 +96,39 @@ services:
         # Downstream topics (producers arrive in later milestones)
         create rail.graph.cascade   22
         create rail.predictions.stgcn 22
+        create rail.criticality.scored 22
         create rail.decisions.topk  22
         # Passenger-information / display feed (keyed by line "canal")
         create rail.display         22
         echo "All topics created."
         kafka-topics --bootstrap-server kafka:29092 --list
+
+  # --- Predictive STGCN service (Engine 3, Python + PyTorch) ----------------
+  # Consumes processed telemetry, forecasts delay escalation (I_P), and streams
+  # PredictionEvents back to rail.predictions.stgcn for the Java criticality joiner.
+  # The graph engine (topology source) runs on the host via `make run-graph`, so
+  # the container reaches it through host.docker.internal.
+  stgcn-predictor:
+    build:
+      context: .
+      dockerfile: predictive-stgcn-service/Dockerfile
+    container_name: rail-stgcn
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "8092:8092"
+    environment:
+      STGCN_BOOTSTRAP_SERVERS: "kafka:29092"
+      STGCN_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      STGCN_GRAPH_ENGINE_URL: "http://host.docker.internal:8091"
+      STGCN_TELEMETRY_TOPIC: "rail.raw.position"
+      STGCN_PREDICTION_TOPIC: "rail.predictions.stgcn"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles: ["ml"]   # opt-in: `docker compose --profile ml up`
 
   # --- Redpanda Console (topic/schema/consumer-group visualization) ---------
   console:

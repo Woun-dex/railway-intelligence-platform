@@ -1,0 +1,14 @@
+# Generated protobuf bindings (regenerated from shared-schemas)
+src/proto/*_pb2.py
+src/proto/*_pb2.pyi
+src/proto/*_pb2_grpc.py
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.pt
+.pytest_cache/
+.mypy_cache/

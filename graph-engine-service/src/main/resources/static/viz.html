@@ -6,98 +6,191 @@
 <title>Rail Network — Spectral Matrix &amp; Cascade (Mapbox)</title>
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css" rel="stylesheet"/>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=SF+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link href="viz.css" rel="stylesheet"/>
 </head>
 <body>
-<header>
-  <h1>Rail Network Intelligence — Engine 1</h1>
-  <span class="meta" id="summary">loading…</span>
-</header>
 
-<div class="wrap">
-  <!-- ===== MATRIX ===== -->
-  <div class="panel" id="matrixPanel">
-    <h2>Graph operator <span class="muted">(stations × stations, line-clustered)</span></h2>
-    <div class="seg" id="matModes">
-      <button data-m="A" class="on">A · adjacency</button>
-      <button data-m="adjacency">Â · GCN</button>
-      <button data-m="laplacian">L · Laplacian</button>
-      <button data-m="scaled">L̃ · scaled</button>
-    </div>
-    <canvas id="matrix" width="520" height="520"></canvas>
-    <div class="cbar"><span id="cbarLo">·</span><canvas id="cbar" width="180" height="12"></canvas><span id="cbarHi">·</span></div>
-    <div class="mathbox"><div class="eq" id="mathEq">—</div><div id="mathStats"></div></div>
-  </div>
-
-  <!-- ===== MAP ===== -->
-  <div class="panel">
-    <h2>Live network map <span class="muted">(real coordinates · click a station to inject a delay)</span></h2>
-    <div id="map"></div>
-    <div id="lines"></div>
-  </div>
-
-  <!-- ===== CONTROLS ===== -->
-  <div class="panel" style="min-width:300px;flex:1;">
-    <h2>Cascade propagation (Engine 1a)</h2>
-    <div class="form">
-      <label style="flex:1;">Inject delay at
-        <div class="search-wrap"><input id="cascSearch" placeholder="Type a station…" autocomplete="off"/><div class="search-drop" id="cascDrop"></div></div>
-        <input type="hidden" id="cascFrom" value=""/>
-      </label>
-    </div>
-    <div class="form">
-      <label>δ₀ <input id="cascDelay" type="number" min="1" max="60" value="10" style="width:56px;"/> min</label>
-      <button id="cascGo" class="act">▶ Propagate</button>
-      <button id="cascClear" class="act">clear</button>
-    </div>
-    <div class="hint">Tip: click any station dot on the map to inject there instantly.</div>
-    <div id="cascStats" class="muted" style="margin-top:8px;">Pick a station and propagate a primary delay to watch it ripple with slack absorption.</div>
-
-    <h2 style="margin-top:16px;">RAPTOR journey (Engine 1b)</h2>
-    <div class="form">
-      <label style="flex:1;">From
-        <div class="search-wrap"><input id="fromSearch" placeholder="Type to search…" autocomplete="off"/><div class="search-drop" id="fromDrop"></div></div>
-        <input type="hidden" id="from" value=""/>
-      </label>
-    </div>
-    <div class="form">
-      <label style="flex:1;">To
-        <div class="search-wrap"><input id="toSearch" placeholder="Type to search…" autocomplete="off"/><div class="search-drop" id="toDrop"></div></div>
-        <input type="hidden" id="to" value=""/>
-      </label>
-    </div>
-    <div class="form"><label>Depart <input id="dep" type="time" value="07:00"/></label><button id="go" class="act">Plan</button></div>
-    <div id="plan" class="muted">Pick an origin and destination, then Plan to see the Pareto frontier.</div>
-
-    <h2 style="margin-top:14px;">Top hubs <span class="muted">(personalized PageRank)</span></h2>
-    <div id="hubs" class="muted">—</div>
-    <div class="pcc">
-      <div class="muted" style="margin:8px 0 4px;">PCC control — operational priority (recomputes the hub ranking)</div>
-      <div class="form">
-        <select id="pccTarget"><option value="LINE">Line</option><option value="STATION">Station idx</option></select>
-        <input id="pccId" placeholder="e.g. B  or  16" style="width:110px;"/>
-        <input id="pccWeight" type="number" step="0.5" min="0" value="0" style="width:60px;" title="0 = closed · 1 = normal · >1 = boost"/>
-        <button id="pccApply" class="act">apply</button>
-        <button id="pccReset" class="act">reset</button>
+<div id="app">
+  <!-- TOP HEADER -->
+  <header id="topbar">
+    <div class="top-left">
+      <div class="logo-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><path d="M4 15h16"></path><path d="M10 15v4"></path><path d="M14 15v4"></path><path d="M8 9h.01"></path><path d="M12 9h.01"></path><path d="M16 9h.01"></path></svg>
       </div>
-      <div class="hint">weight: 0 = closed/suppressed · 1 = normal (clears) · &gt;1 = boosted. Cron also refreshes every 5 min.</div>
-      <div id="pccState" class="muted" style="margin-top:4px;">no overrides</div>
+      <h1>Rail Intelligence OS</h1>
+      <div class="meta" id="summary">loading…</div>
     </div>
-  </div>
+    <div class="top-right">
+      <div class="clock-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>
+        <span id="boardClock" class="clock">--:--:--</span>
+      </div>
+      <button class="icon-btn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
+      <button class="icon-btn notification"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg><span class="badge"></span></button>
+    </div>
+  </header>
 
-  <!-- ===== DEPARTURE BOARD ===== -->
-  <div class="panel" id="boardPanel" style="min-width:300px;">
-    <h2>Departure board <span class="muted">· next trains, local time</span>
-      <span id="boardClock" class="clock">--:--:--</span></h2>
-    <div class="form">
-      <label style="flex:1;">Station
-        <div class="search-wrap"><input id="boardSearch" placeholder="Type a station…" autocomplete="off"/><div class="search-drop" id="boardDrop"></div></div>
-        <input type="hidden" id="boardStation" value=""/>
-      </label>
+  <!-- LEFT SIDEBAR -->
+  <aside id="sidebar-left">
+    <div class="engine-info">
+      <div class="engine-badge">E1</div>
+      <div class="engine-details">
+        <div class="engine-name">Engine 1</div>
+        <div class="engine-status"><span class="dot"></span> Network Active</div>
+      </div>
     </div>
-    <div class="hint">Each line ("canal") shows its own next departures and terminus. Click a station on the map to switch boards.</div>
-    <div id="board" class="muted" style="margin-top:8px;">Pick a station to see live departures per line.</div>
-  </div>
+    
+    <nav class="side-nav">
+      <a href="#" class="active">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+        Network
+      </a>
+      <a href="#">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+        Analytics
+      </a>
+      <a href="#">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+        Logs
+      </a>
+      <a href="#">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M6 20V10M18 20V4"></path></svg>
+        Telemetry
+      </a>
+      <a href="#">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        System
+      </a>
+    </nav>
+    
+    <div class="system-load">
+      <div class="sl-title" id="slTitle">NETWORK LOAD</div>
+      <div class="progress-bar"><div class="progress-fill" id="slFill" style="width:0%;"></div></div>
+      <div class="sl-value" id="slValue">—</div>
+    </div>
+  </aside>
+
+  <!-- MAIN MAP -->
+  <main id="main">
+    <div class="map-panel">
+      <div class="map-header">
+        <h2>Live network map <span class="muted">(real coordinates · click a station to inject a delay)</span></h2>
+      </div>
+      <div id="map"></div>
+      <div class="map-footer">
+        <div id="lines"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- RIGHT SIDEBAR -->
+  <aside id="sidebar-right">
+    <!-- GRAPH OPERATOR -->
+    <div class="panel" id="matrixPanel">
+      <div class="panel-header">
+        <h2>Graph operator <span class="muted" style="margin-left:auto;font-weight:400;font-size:11px;">(stations × stations, line-clustered)</span></h2>
+        <div class="seg" id="matModes">
+          <button data-m="A" class="on">A</button>
+          <button data-m="adjacency">Â</button>
+          <button data-m="laplacian">L</button>
+        </div>
+      </div>
+      <div class="matrix-wrap">
+        <canvas id="matrix" width="520" height="520"></canvas>
+      </div>
+      <div class="cbar"><span id="cbarLo">·</span><canvas id="cbar" width="180" height="12"></canvas><span id="cbarHi">·</span></div>
+      <div class="mathbox"><div class="eq" id="mathEq">—</div><div id="mathStats"></div></div>
+    </div>
+
+    <!-- CASCADE PROPAGATION -->
+    <div class="panel" id="cascadePanel">
+      <div class="panel-header">
+        <h2>Cascade propagation</h2>
+        <button class="icon-btn small"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 3.43-5.57l-5.57 5.57"></path><path d="M2 22l5.57-5.57"></path></svg></button>
+      </div>
+      <div class="form">
+        <label style="flex:1;"><span class="label-txt">INJECT DELAY</span>
+          <div class="search-wrap" style="margin-top:6px;">
+            <input id="cascSearch" placeholder="Type a station…" autocomplete="off"/>
+            <div class="search-drop" id="cascDrop"></div>
+            <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          </div>
+          <input type="hidden" id="cascFrom" value=""/>
+        </label>
+      </div>
+      <div id="cascStats" class="terminal-log"></div>
+      <div class="form casc-actions" style="margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:6px;">δ₀ <input id="cascDelay" type="number" min="1" max="60" value="10" style="width:50px;"/> min</label>
+        <button id="cascGo" class="act">Inject</button>
+        <button id="cascClear" class="act outline">Clear</button>
+      </div>
+    </div>
+
+    <!-- DEPARTURE BOARD -->
+    <div class="panel" id="boardPanel">
+      <div class="panel-header">
+        <h2>Departure board</h2>
+      </div>
+      <div class="form">
+        <div class="search-wrap">
+          <input id="boardSearch" placeholder="Type a station…" autocomplete="off"/>
+          <div class="search-drop" id="boardDrop"></div>
+        </div>
+        <input type="hidden" id="boardStation" value=""/>
+      </div>
+      <div id="board" class="muted" style="margin-top:8px;">Pick a station to see live departures.</div>
+    </div>
+    
+    <!-- RAPTOR / HUBS (Hidden by default, keep in DOM for viz.js) -->
+    <div style="display:none;">
+      <h2 style="margin-top:0;">RAPTOR journey (Engine 1b)</h2>
+      <div class="form">
+        <label style="flex:1;">From
+          <div class="search-wrap"><input id="fromSearch" placeholder="Type to search…" autocomplete="off"/><div class="search-drop" id="fromDrop"></div></div>
+          <input type="hidden" id="from" value=""/>
+        </label>
+      </div>
+      <div class="form">
+        <label style="flex:1;">To
+          <div class="search-wrap"><input id="toSearch" placeholder="Type to search…" autocomplete="off"/><div class="search-drop" id="toDrop"></div></div>
+          <input type="hidden" id="to" value=""/>
+        </label>
+      </div>
+      <div class="form"><label>Depart <input id="dep" type="time" value="07:00"/></label><button id="go" class="act">Plan</button></div>
+      <div id="plan" class="muted">Pick an origin and destination, then Plan to see the Pareto frontier.</div>
+
+      <h2 style="margin-top:14px;">Top hubs <span class="muted">(personalized PageRank)</span></h2>
+      <div id="hubs" class="muted">—</div>
+      <div class="pcc">
+        <div class="muted" style="margin:8px 0 4px;">PCC control — operational priority</div>
+        <div class="form">
+          <select id="pccTarget"><option value="LINE">Line</option><option value="STATION">Station idx</option></select>
+          <input id="pccId" placeholder="e.g. B  or  16" style="width:70px;"/>
+          <input id="pccWeight" type="number" step="0.5" min="0" value="0" style="width:50px;"/>
+          <button id="pccApply" class="act">apply</button>
+          <button id="pccReset" class="act outline">reset</button>
+        </div>
+        <div id="pccState" class="muted" style="margin-top:4px;">no overrides</div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- BOTTOM FOOTER -->
+  <footer id="bottombar">
+    <div class="footer-left">
+      © 2024 RAIL NETWORK COMMAND
+      <span class="sep" style="margin:0 12px;opacity:0.3;">|</span> <a href="#">System Status</a>
+      <span class="sep" style="margin:0 12px;opacity:0.3;">|</span> <a href="#">Documentation</a>
+      <span class="sep" style="margin:0 12px;opacity:0.3;">|</span> <a href="#">Protocol Logs</a>
+    </div>
+    <div class="footer-right">
+      <span class="status-dot" id="uplinkDot"></span> <span id="uplinkText">Connecting…</span>
+      <span class="sep" style="margin:0 12px;opacity:0.3;">|</span>
+      Latency: <span id="latency">—</span>
+    </div>
+  </footer>
 </div>
 
 <div id="tip"></div>

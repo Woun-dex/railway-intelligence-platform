@@ -63,6 +63,29 @@ run-graph: ## Run the graph engine (Engine 1: propagation + RAPTOR), :8091
 fetch-gtfs: ## Download the full real Transilien/IDFM GTFS feed into data/gtfs/
 	bash scripts/fetch-gtfs.sh
 
+## ---- Engine 3: predictive STGCN service (Python) ---------------------------
+
+.PHONY: stgcn-protos
+stgcn-protos: ## Generate the Python protobuf bindings from shared-schemas
+	cd predictive-stgcn-service && bash scripts/gen_protos.sh
+
+.PHONY: stgcn-build
+stgcn-build: ## Build the STGCN service image (context = repo root)
+	docker compose --profile ml build stgcn-predictor
+
+.PHONY: stgcn-up
+stgcn-up: ## Run the STGCN predictor (expects infra up + graph engine on :8091)
+	docker compose --profile ml up -d stgcn-predictor
+	@echo "STGCN -> http://localhost:8092/health"
+
+.PHONY: stgcn-test
+stgcn-test: ## Run the STGCN unit + latency (P99<=35ms) tests
+	cd predictive-stgcn-service && pytest -q
+
+.PHONY: stgcn-load
+stgcn-load: ## Simulated-load latency probe against the running STGCN service
+	cd predictive-stgcn-service && python scripts/loadgen.py --clients 16 --rounds 50 --runs 20
+
 ## ---- Validation (DoD) ------------------------------------------------------
 
 .PHONY: smoke

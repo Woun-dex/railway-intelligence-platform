@@ -27,6 +27,29 @@ message CriticalityScore {
   double total         = 6; // aggregated CS
 }
 
+// CriticalityEvent — output of the Engine-1 streaming joiner: the deterministic
+// cascade (Engine 1a) merged with the STGCN escalation forecast (Engine 3) inside
+// a sliding time window, scored into a single Criticality Score.
+//   CS = beta * ( w_T * dT_surplus + w_V * P_missed + w_P * I_P )
+message CriticalityEvent {
+  string event_id     = 1;
+  string trip_id      = 2;  // partition key (the cascade's affected trip)
+  int32  station_id   = 3;
+  string station_name = 4;
+
+  CriticalityScore score = 5;
+
+  // Join provenance — proves the merge happened inside the window.
+  string cascade_event_id    = 6;
+  string prediction_event_id = 7; // empty when no prediction joined (cascade-only)
+  int64  join_lag_ms         = 8; // |t_cascade - t_prediction| within the window
+  bool   prediction_joined   = 9; // true when both sides were present in-window
+
+  string graph_version   = 10;
+  int64  event_time_ms   = 11;
+  int64  decision_time_ms = 12;
+}
+
 // DisplayMessage — a single rankable message destined for a screen.
 message DisplayMessage {
   string message_id  = 1;

@@ -19,7 +19,25 @@ rail:
     topics:
       position: rail.raw.position
       cascade: rail.graph.cascade
+      prediction: rail.predictions.stgcn
+      criticality: rail.criticality.scored
       display: rail.display
+
+  # Engine-1 streaming joiner: merges the deterministic cascade with the STGCN
+  # escalation forecast inside a sliding window and scores a unified Criticality:
+  #   CS = beta * ( w_T * dT_surplus(min) + w_V * P_missed + w_P * I_P )
+  criticality:
+    consumer-group: graph-criticality-joiner
+    window-ms: ${RAIL_CRITICALITY_WINDOW_MS:60000}   # strict join window
+    evict-ms: ${RAIL_CRITICALITY_EVICT_MS:5000}      # stale-entry sweep cadence
+    weights:
+      t: ${RAIL_CS_W_T:1.0}     # travel-time surplus (per minute)
+      v: ${RAIL_CS_W_V:2.0}     # missed-connection probability
+      p: ${RAIL_CS_W_P:3.0}     # STGCN escalation I_P
+    beta-gain: ${RAIL_CS_BETA_GAIN:1.0}   # hub multiplier: beta = 1 + gain * pr/pr_max
+    # Emit a cascade-only score (I_P=0) when no prediction joins before eviction,
+    # so the pipeline degrades gracefully if Engine 3 is offline.
+    emit-unjoined: ${RAIL_CRITICALITY_EMIT_UNJOINED:true}
 
   # Passenger-information feed: the engine publishes next-departure events to
   # rail.display on this cadence (one message per departure, keyed by line/"canal").
