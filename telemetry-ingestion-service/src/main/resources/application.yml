@@ -19,6 +19,25 @@ rail:
       incident: rail.raw.incident
       dlq: rail.raw.dlq
 
+  # Graph engine that serves the stop_id → station-index map. The gateway loads it
+  # to translate feed-native GTFS stop_ids before publishing; if unreachable,
+  # resolution is a no-op and events publish with the station left unset.
+  graph-engine:
+    url: ${RAIL_GRAPH_ENGINE_URL:http://localhost:8091}
+    stopmap-refresh-ms: ${RAIL_STOPMAP_REFRESH_MS:300000}
+
+  # Real GTFS-Realtime feed poller. Disabled until a URL is set (leave blank for
+  # the synthetic/HTTP-driven dev path). For IDFM/Transilien set the PRIM endpoints
+  # + apikey header. The poller reuses the normal ingest path (normalize → resolve
+  # stop_id → publish), so the rest of the pipeline is unchanged.
+  feed:
+    gtfs-rt:
+      trip-updates-url: ${RAIL_GTFSRT_TRIP_UPDATES_URL:}
+      vehicle-positions-url: ${RAIL_GTFSRT_VEHICLE_POSITIONS_URL:}
+      poll-interval-ms: ${RAIL_GTFSRT_POLL_MS:30000}
+      api-key-header: ${RAIL_GTFSRT_API_KEY_HEADER:}
+      api-key-value: ${RAIL_GTFSRT_API_KEY_VALUE:}
+
 management:
   endpoints:
     web:

@@ -1,0 +1,13 @@
+{
+  "graph_version": "g-1782352796",
+  "n_nodes": 443,
+  "history_steps": 12,
+  "horizon_seconds": 1800,
+  "cheb_order": 3,
+  "hidden_channels": 32,
+  "delay_scale": 600.0,
+  "val_mse": 4.043774795532227,
+  "val_mae_seconds": 888.6914253234863,
+  "trained_at": 1782354419082,
+  "source": "digital-twin-simulator"
+}

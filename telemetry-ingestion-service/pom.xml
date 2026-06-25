@@ -44,6 +44,14 @@
             <artifactId>kafka-protobuf-serializer</artifactId>
         </dependency>
 
+        <!-- GTFS-Realtime protobuf bindings: parse real SIRI-ET/GTFS-RT feeds
+             (TripUpdate / VehiclePosition) in the feed poller. -->
+        <dependency>
+            <groupId>org.mobilitydata</groupId>
+            <artifactId>gtfs-realtime-bindings</artifactId>
+            <version>0.0.8</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

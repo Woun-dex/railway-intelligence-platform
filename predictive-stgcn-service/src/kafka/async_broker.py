@@ -23,7 +23,7 @@ import threading
 import time
 from collections import deque
 
-from confluent_kafka import Consumer, Producer
+from confluent_kafka import Consumer, Producer, TopicPartition
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.protobuf import ProtobufDeserializer, ProtobufSerializer
 from confluent_kafka.serialization import MessageField, SerializationContext
@@ -73,16 +73,27 @@ class AsyncBroker:
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
         self._running = True
-        self._consumer.subscribe([self.cfg.telemetry_topic])
+        topic = self.cfg.telemetry_topic
+        if self.cfg.assign_all_partitions:
+            # The spatial graph conv needs the WHOLE network's state. Manually
+            # assign every partition so this instance always has global state,
+            # rather than joining a balanced group that would shard stations
+            # across instances. Scale vertically; run a warm standby for HA.
+            md = self._consumer.list_topics(topic, timeout=10)
+            parts = list(md.topics[topic].partitions.keys())
+            self._consumer.assign([TopicPartition(topic, p) for p in parts])
+            log.info("assigned ALL %d partitions of %s (global-state inference)", len(parts), topic)
+        else:
+            self._consumer.subscribe([topic])
         self._spawn(self._consume_loop, "stgcn-consumer")
         self._spawn(self._infer_loop, "stgcn-inference")
-        log.info("broker started: %s -> [STGCN] -> %s",
-                 self.cfg.telemetry_topic, self.cfg.prediction_topic)
+        log.info("broker started: %s -> [STGCN] -> %s", topic, self.cfg.prediction_topic)
 
     def stop(self) -> None:
         self._running = False
         for t in self._threads:
             t.join(timeout=5.0)
+        self.engine.snapshot()  # persist buffer so the next start warm-starts
         try:
             self._producer.flush(5.0)
             self._consumer.close()
@@ -118,6 +129,8 @@ class AsyncBroker:
     def _infer_loop(self) -> None:
         ctx = SerializationContext(self.cfg.prediction_topic, MessageField.VALUE)
         interval = self.cfg.inference_interval_ms / 1000.0
+        snap_ms = self.cfg.state_snapshot_ms
+        last_snap = time.monotonic()
         while self._running:
             t_tick = time.perf_counter()
             try:
@@ -129,6 +142,9 @@ class AsyncBroker:
                     self.last_infer_ms = preds[0].inference_time_ms
                     self._infer_samples.append(preds[0].inference_time_ms)
                 self._producer.poll(0)  # serve delivery callbacks
+                if snap_ms and (time.monotonic() - last_snap) * 1000 >= snap_ms:
+                    self.engine.snapshot()
+                    last_snap = time.monotonic()
             except Exception as exc:  # noqa: BLE001 — never let a tick kill the loop
                 log.exception("inference tick failed: %s", exc)
             sleep = interval - (time.perf_counter() - t_tick)

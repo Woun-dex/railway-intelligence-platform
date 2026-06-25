@@ -35,13 +35,37 @@ class Settings(BaseSettings):
     cheb_order: int = 3              # K: Chebyshev polynomial order (spatial receptive field)
     hidden_channels: int = 32
     frame_seconds: int = 60          # one temporal step = this many wall-clock seconds
-    checkpoint_path: str = ""        # optional .pt state_dict; random-init + heuristic fallback if empty
+    # Trained weights. Auto-loaded when the file exists; otherwise the model runs
+    # random-initialized and stations fall back to the persistence heuristic.
+    checkpoint_path: str = "artifacts/stgcn.pt"
+    delay_scale: float = 600.0       # seconds; inputs/targets are divided by this for stable training
     min_warm_steps: int = 3          # below this many observed frames a station uses the heuristic fallback
     torch_threads: int = 1           # intra-op threads; 1 keeps per-request latency predictable
 
     # ---- Inference scheduling ---------------------------------------------
     inference_interval_ms: int = 1000  # cadence of the rolling batch forward pass
     model_version: str = "stgcn-0.1.0"
+
+    # ---- Scaling / state ---------------------------------------------------
+    # The spatial graph conv needs the WHOLE network's state, but the telemetry
+    # topic is partitioned by trip. So an inference instance manually assigns ALL
+    # partitions (global state) instead of joining a balanced consumer group:
+    # scale vertically, and run a warm standby that restores from the snapshot.
+    assign_all_partitions: bool = True
+    state_path: str = "artifacts/state.npz"   # rolling-buffer snapshot for warm start
+    state_snapshot_ms: int = 15000            # 0 disables periodic snapshots
+
+    # ---- Training (offline) -----------------------------------------------
+    # The simulator bootstraps a digital-twin dataset from the REAL topology when
+    # no historical feed exists yet (see src/train/). Swap for a real feature
+    # store later without touching the model.
+    train_episodes: int = 600        # simulated disruption episodes
+    train_epochs: int = 30
+    train_batch_size: int = 32
+    train_lr: float = 1e-3
+    train_val_frac: float = 0.2
+    train_seed: int = 1234
+    train_max_sources: int = 4       # concurrent disruptions per episode
 
     # ---- Service -----------------------------------------------------------
     host: str = "0.0.0.0"

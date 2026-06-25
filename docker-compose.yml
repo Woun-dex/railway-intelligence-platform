@@ -126,6 +126,12 @@ services:
       STGCN_GRAPH_ENGINE_URL: "http://host.docker.internal:8091"
       STGCN_TELEMETRY_TOPIC: "rail.raw.position"
       STGCN_PREDICTION_TOPIC: "rail.predictions.stgcn"
+      STGCN_CHECKPOINT_PATH: "/app/artifacts/stgcn.pt"
+      STGCN_STATE_PATH: "/app/artifacts/state.npz"
+    volumes:
+      # Trained checkpoint lives on the host so `... run ... python -m src.train.train`
+      # and the long-running service share it (train once, serve many).
+      - ./predictive-stgcn-service/artifacts:/app/artifacts
     extra_hosts:
       - "host.docker.internal:host-gateway"
     profiles: ["ml"]   # opt-in: `docker compose --profile ml up`

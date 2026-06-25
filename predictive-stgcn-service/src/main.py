@@ -77,6 +77,7 @@ async def health():
     return {
         "status": "ready" if STATE["ready"] else "starting",
         "nodes": engine.n if engine else 0,
+        "model_trained": engine.trained if engine else False,
         "graph_version": engine.topo.graph_version if engine else None,
         "frames_consumed": broker.frames_consumed if broker else 0,
         "predictions_emitted": broker.predictions_emitted if broker else 0,

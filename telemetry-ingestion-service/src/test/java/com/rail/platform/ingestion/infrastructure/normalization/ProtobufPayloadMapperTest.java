@@ -4,15 +4,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.Test;
 
+import java.util.Map;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rail.platform.ingestion.domain.exception.PayloadNormalizationException;
+import com.rail.platform.ingestion.domain.port.out.StationIndexPort;
 import com.rail.platform.schemas.telemetry.PositionEvent;
 
 
 class ProtobufPayloadMapperTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
-    private final ProtobufPayloadMapper parser = new ProtobufPayloadMapper();
+    // Stub resolver: a tiny GTFS stop_id → index map for the resolution tests.
+    private final StationIndexPort stops = stopId -> Map.of(
+            "IDFM:463685", 42, "8775810", 7).get(stopId);
+    private final ProtobufPayloadMapper parser = new ProtobufPayloadMapper(stops);
 
     @Test
     void parsesGtfsRtStyleFlatPayload() throws Exception {
@@ -53,5 +59,37 @@ class ProtobufPayloadMapperTest {
             """);
         assertThatThrownBy(() -> parser.parsePosition(node))
                 .isInstanceOf(PayloadNormalizationException.class);
+    }
+
+    @Test
+    void resolvesGtfsStopIdToStationIndex() throws Exception {
+        var node = mapper.readTree("""
+            {"trip_id":"T4","lat":48.8,"lon":2.3,"stop_id":"IDFM:463685"}
+            """);
+        assertThat(parser.parsePosition(node).getStationId()).isEqualTo(42);
+    }
+
+    @Test
+    void resolvesSiriMonitoringRefToStationIndex() throws Exception {
+        var node = mapper.readTree("""
+            {"trip_id":"T5","lat":48.8,"lon":2.3,"MonitoringRef":"8775810"}
+            """);
+        assertThat(parser.parsePosition(node).getStationId()).isEqualTo(7);
+    }
+
+    @Test
+    void numericStationIdIsTreatedAsExplicitIndex() throws Exception {
+        var node = mapper.readTree("""
+            {"trip_id":"T6","lat":48.8,"lon":2.3,"station_id":95}
+            """);
+        assertThat(parser.parsePosition(node).getStationId()).isEqualTo(95);
+    }
+
+    @Test
+    void unknownStopIdLeavesStationUnset() throws Exception {
+        var node = mapper.readTree("""
+            {"trip_id":"T7","lat":48.8,"lon":2.3,"stop_id":"IDFM:does-not-exist"}
+            """);
+        assertThat(parser.parsePosition(node).getStationId()).isEqualTo(0); // proto default
     }
 }

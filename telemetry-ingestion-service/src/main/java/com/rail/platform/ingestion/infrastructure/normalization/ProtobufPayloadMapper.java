@@ -2,6 +2,7 @@ package com.rail.platform.ingestion.infrastructure.normalization;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.rail.platform.ingestion.domain.exception.PayloadNormalizationException;
+import com.rail.platform.ingestion.domain.port.out.StationIndexPort;
 import com.rail.platform.schemas.telemetry.BlockState;
 import com.rail.platform.schemas.telemetry.GeoPoint;
 import com.rail.platform.schemas.telemetry.IncidentCategory;
@@ -37,6 +38,13 @@ import java.util.concurrent.ThreadLocalRandom;
 @Component
 public class ProtobufPayloadMapper {
 
+    /** Resolves feed-native {@code stop_id}s to station indices (see {@link StationIndexPort}). */
+    private final StationIndexPort stationIndex;
+
+    public ProtobufPayloadMapper(StationIndexPort stationIndex) {
+        this.stationIndex = stationIndex;
+    }
+
     // ---- field alias tables (SIRI-ET / GTFS-RT variations) -----------------
     private static final String[] TRIP_ID   = {"trip_id", "tripId", "tripRef", "DatedVehicleJourneyRef", "VehicleJourneyRef"};
     private static final String[] VEHICLE_ID = {"vehicle_id", "vehicleId", "vehicleRef", "VehicleRef"};
@@ -46,7 +54,7 @@ public class ProtobufPayloadMapper {
     private static final String[] DELAY      = {"delay_seconds", "delaySeconds", "delay", "Delay"};
     private static final String[] BEARING    = {"bearing", "heading", "Bearing"};
     private static final String[] SPEED      = {"speed_kmh", "speed", "Velocity"};
-    private static final String[] STATION_ID = {"station_id", "stationId", "stopId", "MonitoringRef"};
+    private static final String[] STATION_ID = {"station_id", "stationId", "stop_id", "stopId", "StopPointRef", "MonitoringRef"};
     private static final String[] NEXT_STOP  = {"next_stop_id", "nextStopId", "nextStopRef"};
     private static final String[] TIMESTAMP  = {"event_time_ms", "timestamp", "ts", "RecordedAtTime"};
     private static final String[] SOURCE     = {"source_feed", "source", "producer"};
@@ -75,8 +83,16 @@ public class ProtobufPayloadMapper {
         Double lon = readDouble(posNode, LON);
         if (lat == null) lat = readDouble(node, LAT);
         if (lon == null) lon = readDouble(node, LON);
-        if (lat == null || lon == null) {
-            throw new PayloadNormalizationException("PositionEvent missing coordinates for trip_id=" + tripId);
+
+        // A position frame must localize the train *somehow*: either GPS coordinates
+        // (GTFS-RT VehiclePosition) or a resolvable station reference (GTFS-RT
+        // TripUpdate carries stop_id + delay but no GPS). Reject only when neither is
+        // present, so real feeds aren't all dead-lettered for lacking coordinates.
+        Integer station = resolveStation(node);
+        boolean hasCoords = lat != null && lon != null;
+        if (!hasCoords && station == null) {
+            throw new PayloadNormalizationException(
+                    "PositionEvent has neither coordinates nor a resolvable station for trip_id=" + tripId);
         }
 
         long now = System.currentTimeMillis();
@@ -85,19 +101,20 @@ public class ProtobufPayloadMapper {
                 .setTripId(tripId)
                 .setVehicleId(textOrEmpty(node, VEHICLE_ID))
                 .setLineId(textOrEmpty(node, LINE_ID))
-                .setPosition(GeoPoint.newBuilder().setLatitude(lat).setLongitude(lon).build())
                 .setDelaySeconds(readDelaySeconds(node))
                 .setSourceFeed(textOr(node, SOURCE, "UNKNOWN"))
                 .setGraphVersion(textOrEmpty(node, GRAPH_VER))
                 .setEventTimeMs(readTimestampMs(node, now))
                 .setIngestTimeMs(now);
+        if (hasCoords) {
+            b.setPosition(GeoPoint.newBuilder().setLatitude(lat).setLongitude(lon).build());
+        }
+        if (station != null) b.setStationId(station);
 
         Double bearing = readDouble(node, BEARING);
         if (bearing != null) b.setBearing(bearing);
         Double speed = readDouble(node, SPEED);
         if (speed != null) b.setSpeedKmh(speed);
-        Integer station = readInt(node, STATION_ID);
-        if (station != null) b.setStationId(station);
         Integer next = readInt(node, NEXT_STOP);
         if (next != null) b.setNextStopId(next);
 
@@ -123,9 +140,35 @@ public class ProtobufPayloadMapper {
                 .setEventTimeMs(readTimestampMs(node, now))
                 .setIngestTimeMs(now);
 
-        Integer station = readInt(node, STATION_ID);
+        Integer station = resolveStation(node);
         if (station != null) b.setStationId(station);
         return b.build();
+    }
+
+    /**
+     * Resolve the station reference. An explicit numeric value is taken as the
+     * station index (back-compat with synthetic/internal events); a feed-native
+     * {@code stop_id} string is translated via {@link StationIndexPort}, falling
+     * back to a bare-numeric string as an index. Returns {@code null} when nothing
+     * resolves, so the event is published with the station left unset rather than
+     * mis-addressed.
+     */
+    private Integer resolveStation(JsonNode node) {
+        for (String key : STATION_ID) {
+            JsonNode v = node.get(key);
+            if (v == null || v.isNull()) continue;
+            if (v.isNumber()) return (int) Math.round(v.asDouble());
+            if (v.isTextual()) {
+                String s = v.asText().trim();
+                if (s.isEmpty()) continue;
+                Integer idx = stationIndex == null ? null : stationIndex.resolve(s);
+                if (idx != null) return idx;
+                if (!s.isEmpty() && s.chars().allMatch(Character::isDigit)) {
+                    return Integer.parseInt(s);
+                }
+            }
+        }
+        return null;
     }
 
     // ========================================================================

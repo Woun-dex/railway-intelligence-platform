@@ -97,6 +97,31 @@ public class GraphMatrixController {
         });
     }
 
+    /**
+     * GTFS {@code stop_id} → internal station index map. Real-time feeds (SIRI-ET /
+     * GTFS-RT) address stops by their GTFS {@code stop_id} string, but the engine
+     * (and the STGCN spatial operator) index stations by a dense integer. The
+     * ingestion gateway loads this map to resolve incoming feed identifiers before
+     * publishing, so a real feed addresses the right node.
+     */
+    @GetMapping("/stopmap")
+    public Mono<ResponseEntity<Map<String, Integer>>> stopMap() {
+        return Mono.fromSupplier(() -> {
+            RailTopology t = repository.current();
+            if (t == null) {
+                return ResponseEntity.<Map<String, Integer>>status(503).build();
+            }
+            Map<String, Integer> map = new LinkedHashMap<>();
+            for (int i = 0; i < t.stationCount(); i++) {
+                String sid = t.stopId(i);
+                if (sid != null && !sid.isBlank()) {
+                    map.putIfAbsent(sid, i);
+                }
+            }
+            return ResponseEntity.ok(map);
+        });
+    }
+
     @GetMapping("/stats")
     public Mono<ResponseEntity<Map<String, Object>>> stats() {
         return Mono.fromSupplier(() -> {

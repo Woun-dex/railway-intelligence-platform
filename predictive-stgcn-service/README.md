@@ -72,6 +72,53 @@ bash scripts/gen_protos.sh                            # generate *_pb2 from shar
 python -m uvicorn src.main:app --port 8092
 ```
 
+## Training (real checkpoint)
+
+No historical archive exists yet, so training bootstraps a **digital twin**: it
+fetches the real Chebyshev Laplacian from the graph engine and rolls out disruption
+episodes on the actual 443-station network (graph diffusion + injection + recovery,
+see [src/train/simulate.py](src/train/simulate.py)), then trains the STGCN to
+predict the horizon delay *residual* δ(t+h)−δ(t). Swap the simulator for a real
+feature store later without touching the model.
+
+```bash
+# infra up + graph engine running, then (image has torch):
+docker compose --profile ml run --rm \
+  -v "$PWD/predictive-stgcn-service/artifacts:/app/artifacts" \
+  stgcn-predictor python -m src.train.train
+docker compose --profile ml up -d --force-recreate stgcn-predictor   # loads the checkpoint
+curl -s localhost:8092/health | jq .model_trained   # -> true
+```
+
+The checkpoint + sidecar metadata (`stgcn.pt`, `stgcn.pt.json`) land in the mounted
+`artifacts/` volume; the service auto-loads it on start. Until a checkpoint exists,
+the service runs the persistence heuristic everywhere (`model_trained:false`,
+`fallback_used:true`) — honest rather than emitting random-weight noise.
+
+## Scaling & state (the deliberate decision)
+
+The spatial graph convolution needs the **whole** network's state every step, but
+the telemetry topic is partitioned by `trip_id`. A balanced consumer group would
+shard stations across instances and each STGCN would see only a fragment of the
+graph → wrong forecasts. So:
+
+- **Inference runs as a single stateful instance that manually assigns _all_
+  partitions** (`assign_all_partitions=true`), giving it global state. **Scale
+  vertically**, not by adding inference replicas.
+- **Warm start / HA via state snapshots.** The rolling `[T,N]` buffer is snapshotted
+  to `artifacts/state.npz` every `STGCN_STATE_SNAPSHOT_MS` and on shutdown, and
+  restored on boot (validated against `n` + `graph_version`). A restarted instance —
+  or a warm standby pointed at the same snapshot — resumes with history instead of a
+  cold buffer. Ingestion and the graph engine still scale horizontally as normal.
+
+## Real feed (ingestion side)
+
+Real telemetry now flows without hand-injection: the **ingestion service** has a
+config-gated GTFS-Realtime poller (`rail.feed.gtfs-rt.*`) that maps `TripUpdate` /
+`VehiclePosition` entities to position frames and resolves feed `stop_id`s to
+station indices via the graph engine's `/graph/stopmap` (see `StationIndexPort`).
+Set the PRIM/IDFM URLs + apikey to turn it on; leave blank for the synthetic path.
+
 ## Validate the DoD
 
 **Inference latency P99 ≤ 35 ms** — pure model path:
